@@ -1,7 +1,7 @@
 {
   "name": "agentshield-ultimate",
   "version": "1.0.0",
-  "description": "Universal AI Agent Security Framework - Zero-Trust Runtime Enforcement, Skill Scanning, Browser Guard, MCP Security, and Risk Governance",
+  "description": "Universal Zero-Trust AI Agent Security Framework: Runtime Enforcement, Skill Scanning, Browser Guard, MCP Protection, and Cryptographic Approvals",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",
   "bin": {
@@ -68,6 +68,7 @@
     "dist/src",
     "skills",
     "integrations",
+    "LICENSE",
     "README.md",
     "ATTRIBUTION.md",
     "THIRD_PARTY_NOTICES.md"
@@ -83,22 +84,37 @@
   },
   "keywords": [
     "ai-agent-security",
+    "agentic-security",
     "prompt-injection",
-    "mcp-security",
     "zero-trust",
+    "mcp-security",
+    "model-context-protocol",
     "browser-guard",
     "ad-blocker",
     "skill-scanner",
-    "model-context-protocol",
-    "cybersecurity",
     "claude-code",
     "codex",
-    "cursor"
+    "cursor",
+    "cybersecurity",
+    "runtime-guard",
+    "agent-sandbox",
+    "owasp-llm"
   ],
-  "author": "AgentShield Ultimate Contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mohdarsh79/agentshield-ultimate.git"
+  },
+  "homepage": "https://github.com/mohdarsh79/agentshield-ultimate#readme",
+  "bugs": {
+    "url": "https://github.com/mohdarsh79/agentshield-ultimate/issues"
+  },
+  "author": "mohdarsh79 (https://github.com/mohdarsh79)",
   "license": "MIT",
   "engines": {
     "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

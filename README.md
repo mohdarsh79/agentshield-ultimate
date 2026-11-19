@@ -1,10 +1,12 @@
 # AgentShield Ultimate
 
 <p align="left">
+  <a href="https://www.npmjs.com/package/agentshield-ultimate"><img src="https://img.shields.io/npm/v/agentshield-ultimate?style=flat-square&color=blue" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/agentshield-ultimate"><img src="https://img.shields.io/npm/l/agentshield-ultimate?style=flat-square&color=green" alt="License" /></a>
   <a href=".github/SECURITY.md"><img src="https://img.shields.io/badge/Security-Policy%20Active-brightgreen?style=flat-square" alt="Security Policy" /></a>
-  <a href="ARCHITECTURE.md"><img src="https://img.shields.io/badge/Security%20Architecture-Zero--Trust-blue?style=flat-square" alt="Zero Trust" /></a>
-  <a href="SECURITY_TESTING.md"><img src="https://img.shields.io/badge/Automated%20Tests-35%20Passing-success?style=flat-square" alt="Tests" /></a>
-  <a href="package.json"><img src="https://img.shields.io/badge/Release-v1.0.0-blueviolet?style=flat-square" alt="Version" /></a>
+  <a href="ARCHITECTURE.md"><img src="https://img.shields.io/badge/Architecture-Zero--Trust-blue?style=flat-square" alt="Zero Trust" /></a>
+  <a href="SECURITY_TESTING.md"><img src="https://img.shields.io/badge/Tests-35%20Passing-success?style=flat-square" alt="Tests" /></a>
+  <img src="https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen?style=flat-square" alt="Node Engine" />
 </p>
 
 > **Universal Zero-Trust Security Framework for Autonomous AI Agents**

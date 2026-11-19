@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+audit.jsonl
+.DS_Store
+*.tsbuildinfo
+coverage/
+.env
+.env.*
+!.env.example

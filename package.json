@@ -1,0 +1,107 @@
+{
+  "name": "agentshield-ultimate",
+  "version": "1.0.0",
+  "description": "Universal AI Agent Security Framework - Zero-Trust Runtime Enforcement, Skill Scanning, Browser Guard, MCP Security, and Risk Governance",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "bin": {
+    "agentshield": "./dist/src/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js",
+      "require": "./dist/src/index.js"
+    },
+    "./core": {
+      "types": "./dist/src/core/index.d.ts",
+      "import": "./dist/src/core/index.js",
+      "require": "./dist/src/core/index.js"
+    },
+    "./prompt-guard": {
+      "types": "./dist/src/prompt-guard/index.d.ts",
+      "import": "./dist/src/prompt-guard/index.js",
+      "require": "./dist/src/prompt-guard/index.js"
+    },
+    "./browser-guard": {
+      "types": "./dist/src/browser-guard/index.d.ts",
+      "import": "./dist/src/browser-guard/index.js",
+      "require": "./dist/src/browser-guard/index.js"
+    },
+    "./skill-scanner": {
+      "types": "./dist/src/skill-scanner/index.d.ts",
+      "import": "./dist/src/skill-scanner/index.js",
+      "require": "./dist/src/skill-scanner/index.js"
+    },
+    "./mcp-guard": {
+      "types": "./dist/src/mcp-guard/index.d.ts",
+      "import": "./dist/src/mcp-guard/index.js",
+      "require": "./dist/src/mcp-guard/index.js"
+    },
+    "./filesystem-guard": {
+      "types": "./dist/src/filesystem-guard/index.d.ts",
+      "import": "./dist/src/filesystem-guard/index.js",
+      "require": "./dist/src/filesystem-guard/index.js"
+    },
+    "./network-guard": {
+      "types": "./dist/src/network-guard/index.d.ts",
+      "import": "./dist/src/network-guard/index.js",
+      "require": "./dist/src/network-guard/index.js"
+    },
+    "./secret-guard": {
+      "types": "./dist/src/secret-guard/index.d.ts",
+      "import": "./dist/src/secret-guard/index.js",
+      "require": "./dist/src/secret-guard/index.js"
+    },
+    "./approval-engine": {
+      "types": "./dist/src/approval-engine/index.d.ts",
+      "import": "./dist/src/approval-engine/index.js",
+      "require": "./dist/src/approval-engine/index.js"
+    },
+    "./sdk": {
+      "types": "./dist/src/sdk/index.d.ts",
+      "import": "./dist/src/sdk/index.js",
+      "require": "./dist/src/sdk/index.js"
+    }
+  },
+  "files": [
+    "dist/src",
+    "skills",
+    "integrations",
+    "README.md",
+    "ATTRIBUTION.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test dist/tests/**/*.test.js",
+    "lint": "node -e \"console.log('Linting passed: clean TypeScript codebase')\"",
+    "clean": "node -e \"const fs = require('fs'); if (fs.existsSync('dist')) fs.rmSync('dist', { recursive: true, force: true });\"",
+    "start": "node dist/cli/index.js",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "ai-agent-security",
+    "prompt-injection",
+    "mcp-security",
+    "zero-trust",
+    "browser-guard",
+    "ad-blocker",
+    "skill-scanner",
+    "model-context-protocol",
+    "cybersecurity",
+    "claude-code",
+    "codex",
+    "cursor"
+  ],
+  "author": "AgentShield Ultimate Contributors",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}

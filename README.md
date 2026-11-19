@@ -1,7 +1,7 @@
 # AgentShield Ultimate
 
 <p align="left">
-  <a href="SECURITY.md"><img src="https://img.shields.io/badge/Security-Policy%20Active-brightgreen?style=flat-square" alt="Security Policy" /></a>
+  <a href=".github/SECURITY.md"><img src="https://img.shields.io/badge/Security-Policy%20Active-brightgreen?style=flat-square" alt="Security Policy" /></a>
   <a href="ARCHITECTURE.md"><img src="https://img.shields.io/badge/Security%20Architecture-Zero--Trust-blue?style=flat-square" alt="Zero Trust" /></a>
   <a href="SECURITY_TESTING.md"><img src="https://img.shields.io/badge/Automated%20Tests-35%20Passing-success?style=flat-square" alt="Tests" /></a>
   <a href="package.json"><img src="https://img.shields.io/badge/Release-v1.0.0-blueviolet?style=flat-square" alt="Version" /></a>

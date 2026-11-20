@@ -112,7 +112,7 @@ export class FilesystemGuard {
       }
     }
 
-    // 5. Workspace Boundary Confinement & Symlink Resolution
+    // 5. Workspace Boundary Confinement & Symlink Resolution (TOCTOU Defense)
     try {
       const resolvedWorkspace = path.resolve(workspaceRoot);
       const resolvedTarget = path.resolve(workspaceRoot, decoded);
@@ -143,18 +143,32 @@ export class FilesystemGuard {
         };
       }
 
-      // Check real path for symlink escapes if file exists
-      if (fs.existsSync(resolvedTarget)) {
-        const real = fs.realpathSync(resolvedTarget);
-        const realRelative = path.relative(resolvedWorkspace, real);
+      // Check canonical path via fs.realpathSync to block symlink escapes
+      let pathToCheck = resolvedTarget;
+      if (!fs.existsSync(resolvedTarget)) {
+        // If file does not exist yet (e.g. create/write), inspect nearest existing ancestor directory
+        let currentDir = path.dirname(resolvedTarget);
+        while (!fs.existsSync(currentDir) && currentDir !== path.dirname(currentDir)) {
+          currentDir = path.dirname(currentDir);
+        }
+        if (fs.existsSync(currentDir)) {
+          pathToCheck = currentDir;
+        }
+      }
+
+      if (fs.existsSync(pathToCheck)) {
+        const real = fs.realpathSync(pathToCheck);
+        const realWorkspace = fs.existsSync(resolvedWorkspace) ? fs.realpathSync(resolvedWorkspace) : resolvedWorkspace;
+        const realRelative = path.relative(realWorkspace, real);
+
         if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
           const finding: SecurityFinding = {
             id: `FIND-FS-SYMLINK-${Date.now().toString(36)}`,
             severity: "CRITICAL",
             confidence: "CERTAIN",
             category: "FILESYSTEM",
-            title: "Symlink Escape to External File Blocked",
-            evidence: `Target symlink '${targetPath}' points to external location '${real}'`,
+            title: "Symlink Escape to External Path Blocked",
+            evidence: `Target symlink '${targetPath}' resolves to external host location '${real}' outside '${realWorkspace}'`,
             affectedResource: targetPath,
             impact: "Bypasses workspace boundary via symlink redirection.",
             mitigation: "Deny traversal of symlinks that target paths outside workspace.",

@@ -110,7 +110,7 @@ describe("Security Audit Regression Verification Suite", () => {
       grade: "F",
       totalFindings: 1,
       bySeverity: { CRITICAL: 1, HIGH: 0, MEDIUM: 0, LOW: 0, INFORMATIONAL: 0 },
-      byCategory: { CREDENTIAL: 1, PROMPT_INJECTION: 0, BROWSER: 0, FILESYSTEM: 0, NETWORK: 0, COMMAND: 0, MCP: 0, SKILL: 0, DOWNLOAD: 0, SUPPLY_CHAIN: 0, CONFIGURATION: 0 },
+      byCategory: { CREDENTIAL: 1, PROMPT_INJECTION: 0, BROWSER: 0, FILESYSTEM: 0, NETWORK: 0, COMMAND: 0, MCP: 0, SKILL: 0, DOWNLOAD: 0, SUPPLY_CHAIN: 0, CONFIGURATION: 0, APPROVAL: 0 },
       findings: [{
         id: "XSS-TEST",
         severity: "CRITICAL",
@@ -128,7 +128,7 @@ describe("Security Audit Regression Verification Suite", () => {
       timestamp: new Date().toISOString()
     };
 
-    const inst = await DashboardServer.start(mockReport, undefined, 4188);
+    const inst = await DashboardServer.start(mockReport, 0);
 
     await new Promise<void>((resolve, reject) => {
       http.get(inst.url, (res) => {

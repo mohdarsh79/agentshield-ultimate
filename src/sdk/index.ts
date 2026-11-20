@@ -13,12 +13,14 @@ import { CommandGuard } from "../command-guard";
 import { DownloadGuard, FileAnalysisResult } from "../download-guard";
 import { ApprovalEngine, ApprovalRequest } from "../approval-engine";
 import { RemediationEngine, RemediationResult } from "../remediation";
+import { WorkspaceScanner } from "../workspace-scanner";
 import { SecurityReporter } from "../reporting";
 
 export interface AgentShieldConfig {
   profile?: PolicyProfile;
   workspaceRoot?: string;
   auditLogPath?: string;
+  defaultApprovalTtlSeconds?: number;
 }
 
 export class AgentShield {
@@ -32,11 +34,11 @@ export class AgentShield {
     this.workspaceRoot = config.workspaceRoot || process.cwd();
     this.auditLogger = new AuditLogger(config.auditLogPath);
     this.policyEngine = new PolicyEngine(config.profile || "strict", this.auditLogger);
-    this.approvalEngine = new ApprovalEngine(300);
+    this.approvalEngine = new ApprovalEngine(config.defaultApprovalTtlSeconds || 300);
     this.remediationEngine = new RemediationEngine(this.workspaceRoot);
   }
 
-  // Action Interception Gate
+  // Central Action Interception Gate with Human Approval Workflow
   public interceptAction(ctx: AgentActionContext): SecurityEvaluationResult {
     // 1. Filesystem Guard check if file action
     if (ctx.actionType.startsWith("file_")) {
@@ -62,8 +64,63 @@ export class AgentShield {
       if (!netRes.allowed) return netRes;
     }
 
-    // 4. Central Policy Engine Evaluation
-    return this.policyEngine.evaluateAction(ctx);
+    // 5. Central Policy Engine Evaluation
+    const policyRes = this.policyEngine.evaluateAction(ctx);
+
+    // 6. Integrated Cryptographic Human Approval Gate (F-002 Resolution)
+    if (policyRes.requiresApproval) {
+      if (ctx.approvalToken) {
+        // Verify provided approval token against exact action parameters
+        const verifyRes = this.approvalEngine.verifyApproval(ctx.approvalToken, ctx);
+        if (verifyRes.valid) {
+          this.auditLogger.logAction(ctx, {
+            allowed: true,
+            findings: policyRes.findings,
+            scorePenalty: 0
+          });
+          return {
+            allowed: true,
+            requiresApproval: false,
+            findings: policyRes.findings,
+            scorePenalty: 0
+          };
+        } else {
+          return {
+            allowed: false,
+            requiresApproval: true,
+            blockedReason: `Human approval verification failed: ${verifyRes.reason}`,
+            findings: policyRes.findings,
+            scorePenalty: 20
+          };
+        }
+      } else {
+        // Generate new cryptographic approval challenge
+        const approvalReq = this.approvalEngine.createRequest(
+          ctx, 
+          policyRes.blockedReason || "Action requires explicit human authorization"
+        );
+        return {
+          allowed: false,
+          requiresApproval: true,
+          approvalToken: approvalReq.token,
+          approvalRequest: approvalReq,
+          blockedReason: `Action halted: Requires human approval. Approval Request ID: ${approvalReq.id}`,
+          findings: policyRes.findings,
+          scorePenalty: 15
+        };
+      }
+    }
+
+    return policyRes;
+  }
+
+  // Asynchronous Interception Gate with Live DNS Resolution (F-003 Resolution)
+  public async interceptActionAsync(ctx: AgentActionContext): Promise<SecurityEvaluationResult> {
+    if (ctx.actionType === "network_request") {
+      const netRes = await NetworkGuard.evaluateRequestAsync(ctx);
+      if (!netRes.allowed) return netRes;
+    }
+    return this.interceptAction(ctx);
   }
 
   // Prompt scanning
@@ -76,22 +133,8 @@ export class AgentShield {
     return SecretGuard.scanAndRedact(text, resource);
   }
 
-  // Full scan of directory (skills, configs, secrets)
+  // Comprehensive Multi-Vector Workspace Scan (F-004 Resolution)
   public scanWorkspace(): SecurityScoreReport {
-    const findings: SecurityFinding[] = [];
-
-    // Scan skills and scripts
-    const skillRes = SkillScanner.scanDirectory(this.workspaceRoot);
-    findings.push(...skillRes.findings);
-
-    // Scan MCP configs
-    const mcpConfigPath = `${this.workspaceRoot}/.mcp.json`;
-    findings.push(...McpGuard.auditConfigFile(mcpConfigPath));
-
-    // Audit package.json lifecycle hooks
-    const pkgPath = `${this.workspaceRoot}/package.json`;
-    findings.push(...DownloadGuard.auditPackageJson(pkgPath));
-
-    return RiskEngine.calculateReport(findings);
+    return WorkspaceScanner.scan(this.workspaceRoot);
   }
 }

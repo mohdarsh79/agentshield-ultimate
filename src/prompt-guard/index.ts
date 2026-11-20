@@ -14,7 +14,7 @@ export class PromptGuard {
     { regex: /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions|prompts|rules)/i, name: "System Instruction Override", severity: "CRITICAL" },
     { regex: /system\s+override\b/i, name: "System Override Directive", severity: "CRITICAL" },
     { regex: /disregard\s+(all\s+|any\s+|prior\s+|previous\s+)*(safety|system|operational)\s+(guidelines|filters|boundaries)/i, name: "Safety Bypass Attempt", severity: "CRITICAL" },
-    { regex: /you\s+are\s+now\s+(DAN|unconstrained|jailbroken|freed|an\s+unrestricted\s+AI)/i, name: "Jailbreak Persona Switch", severity: "CRITICAL" },
+    { regex: /you\s+are\s+now\s+(?:in\s+)?(DAN|unconstrained|jailbroken|freed|an\s+unrestricted\s+AI)|\bDAN\s+mode\b/i, name: "Jailbreak Persona Switch", severity: "CRITICAL" },
     { regex: /(reveal|print|output|leak|show|dump)\s+(your\s+)?(system\s+prompt|initial\s+instructions|developer\s+mode|internal\s+credentials)/i, name: "System Prompt Extraction", severity: "HIGH" },
     { regex: /assume\s+the\s+role\s+of\s+an\s+evil|unfiltered|malicious\s+assistant/i, name: "Adversarial Role Assumption", severity: "HIGH" },
     { regex: /developer\s+mode\s+(enabled|activated|override)/i, name: "Developer Mode Exploitation", severity: "HIGH" }

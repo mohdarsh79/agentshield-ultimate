@@ -6,6 +6,7 @@ import { AgentShield } from "../sdk";
 import { SecurityReporter } from "../reporting";
 import { DashboardServer } from "../dashboard";
 import { UniversalAgentAdapterRegistry } from "../adapters";
+import { RedTeamRunner } from "../red-team";
 
 const args = process.argv.slice(2);
 const command = args[0] || "help";
@@ -41,7 +42,7 @@ async function runCli(): Promise<void> {
     }
 
     case "scan": {
-      console.log("\n[*] Running comprehensive AgentShield security scan...");
+      console.log("\n[*] Running comprehensive AgentShield multi-vector workspace scan...");
       const report = shield.scanWorkspace();
       const format = args.includes("--json") ? "json" : args.includes("--sarif") ? "sarif" : args.includes("--md") ? "md" : "ansi";
 
@@ -66,36 +67,45 @@ async function runCli(): Promise<void> {
     }
 
     case "threat-model": {
+      const profile = shield.policyEngine.getProfile();
       console.log("\n=======================================================");
-      console.log(" AGENTSHIELD ULTIMATE THREAT MODEL SUMMARY");
+      console.log(" AGENTSHIELD ULTIMATE THREAT MODEL & TRUST BOUNDARIES");
       console.log("=======================================================");
-      console.log(" - STRIDE Taxonomy Active");
-      console.log(" - Zero-Trust Cognitive Perimeter Active");
-      console.log(" - Boundary 1: LLM Non-deterministic Cognition -> Untrusted");
-      console.log(" - Boundary 2: Host Filesystem, Shell & Network -> Sandboxed");
-      console.log(" - Boundary 3: Financial & Irreversible Actions -> Approval Gate");
+      console.log(` Active Policy Profile : ${profile.toUpperCase()}`);
+      console.log(" Standard Taxonomies   : STRIDE, MITRE ATLAS, OWASP LLM Top 10");
+      console.log("-------------------------------------------------------");
+      console.log(" Trust Boundary 1: LLM Non-Deterministic Cognition -> UNTRUSTED");
+      console.log("   - Enforced by: PromptGuard (injection, jailbreaks, hidden comments, unicode evasion)");
+      console.log(" Trust Boundary 2: Host Operating System & Shell -> SANDBOXED");
+      console.log("   - Enforced by: FilesystemGuard (path traversal, symlink escapes, reserved devices)");
+      console.log("   - Enforced by: CommandGuard (destructive commands, chaining, reverse shells)");
+      console.log(" Trust Boundary 3: Network & External Egress -> ISOLATED");
+      console.log("   - Enforced by: NetworkGuard (cloud metadata SSRF, RFC-1918 subnets, DNS rebinding)");
+      console.log("   - Enforced by: BrowserGuard (ad click hijacking, homograph phishing, open redirects)");
+      console.log(" Trust Boundary 4: High-Risk & Financial Operations -> APPROVAL-GATED");
+      console.log("   - Enforced by: ApprovalEngine (cryptographic SHA-256 parameter binding, single-use)");
       console.log("=======================================================\n");
       break;
     }
 
     case "red-team": {
-      console.log("\n[*] Executing autonomous adversarial red-team test suite...");
-      const attacks = [
-        { name: "Direct Jailbreak ('ignore previous instructions')", passed: true },
-        { name: "Indirect Prompt Injection in Webpage DOM", passed: true },
-        { name: "Unicode Bidi Zero-Width Filter Evasion", passed: true },
-        { name: "Path Traversal Escapes ('../../.ssh/id_rsa')", passed: true },
-        { name: "Cloud Metadata SSRF ('169.254.169.254')", passed: true },
-        { name: "Sponsored Ad Click Hijacking", passed: true },
-        { name: "Poisoned MCP Tool Schema Injection", passed: true },
-        { name: "Remote Bash Pipeline ('curl | bash')", passed: true },
-        { name: "Exposed API Token Exfiltration", passed: true }
-      ];
+      console.log("\n[*] Executing live adversarial red-team test suite against active guards...");
+      const runner = new RedTeamRunner();
+      const summary = await runner.runSuite();
 
-      for (const a of attacks) {
-        console.log(` [PASS] Blocked adversarial scenario: ${a.name}`);
+      for (const res of summary.results) {
+        const tag = res.passed ? "[PASS]" : "[FAIL]";
+        console.log(` ${tag} (${res.category.padEnd(16)}) ${res.name} [${res.durationMs}ms]`);
+        if (!res.passed) {
+          console.log(`        Details: ${res.details}`);
+        }
       }
-      console.log("\n[✓] Adversarial Red-Team Score: 100% Defense Verification Rate.\n");
+      console.log(`-------------------------------------------------------`);
+      console.log(` Total Scenarios: ${summary.totalScenarios} | Passed: ${summary.passedScenarios} | Failed: ${summary.failedScenarios}`);
+      console.log(` Live Defense Verification Rate: ${summary.verificationRate}%\n`);
+      if (summary.failedScenarios > 0) {
+        process.exitCode = 1;
+      }
       break;
     }
 
@@ -146,7 +156,7 @@ async function runCli(): Promise<void> {
     case "dashboard": {
       console.log("\n[*] Launching embedded authenticated Security Dashboard...");
       const report = shield.scanWorkspace();
-      const inst = await DashboardServer.start(report, shield.auditLogger, 4173);
+      const inst = await DashboardServer.start(report, 4173, shield.auditLogger);
       console.log(`[✓] Dashboard live at: ${inst.url}`);
       console.log("    Press Ctrl+C to terminate server.\n");
       break;

@@ -3,7 +3,7 @@ import * as crypto from "crypto";
 import { SecurityScoreReport } from "../types";
 import { AuditLogger } from "../core/audit-logger";
 
-export interface DashboardServerInstance {
+export interface DashboardInstance {
   server: http.Server;
   port: number;
   authToken: string;
@@ -11,9 +11,8 @@ export interface DashboardServerInstance {
   stop: () => Promise<void>;
 }
 
-function escapeHtml(str: string): string {
-  if (!str) return "";
-  return String(str)
+function escapeHtml(unsafe: string): string {
+  return String(unsafe)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -21,21 +20,33 @@ function escapeHtml(str: string): string {
     .replace(/'/g, "&#039;");
 }
 
+function parseCookies(cookieHeader?: string): Record<string, string> {
+  const list: Record<string, string> = {};
+  if (!cookieHeader) return list;
+  cookieHeader.split(";").forEach((cookie) => {
+    const parts = cookie.split("=");
+    if (parts.length >= 2) {
+      list[parts[0].trim()] = decodeURIComponent(parts.slice(1).join("=").trim());
+    }
+  });
+  return list;
+}
+
 export class DashboardServer {
   public static start(
     report: SecurityScoreReport, 
-    auditLogger?: AuditLogger, 
-    preferredPort: number = 4173
-  ): Promise<DashboardServerInstance> {
+    preferredPort: number = 3840,
+    auditLogger?: AuditLogger
+  ): Promise<DashboardInstance> {
     return new Promise((resolve) => {
-      const authToken = crypto.randomBytes(16).toString("hex");
+      const authToken = crypto.randomBytes(32).toString("hex");
       const logger = auditLogger || new AuditLogger();
 
       const server = http.createServer((req, res) => {
         // Security Headers
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("X-Frame-Options", "DENY");
-        res.setHeader("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'self';");
+        res.setHeader("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self';");
 
         // Validate Host Header to prevent DNS rebinding
         const host = req.headers.host || "";
@@ -46,13 +57,22 @@ export class DashboardServer {
         }
 
         const reqUrl = new URL(req.url || "/", `http://${req.headers.host}`);
-        const token = reqUrl.searchParams.get("token") || req.headers["authorization"]?.replace("Bearer ", "");
+        const cookies = parseCookies(req.headers.cookie);
+        const queryToken = reqUrl.searchParams.get("token");
+        const sessionToken = cookies["agentshield_session"];
+        const bearerToken = req.headers["authorization"]?.replace(/^Bearer\s+/i, "");
 
-        // Authentication enforcement
-        if (token !== authToken) {
+        const isAuthenticated = (sessionToken === authToken) || (bearerToken === authToken) || (queryToken === authToken);
+
+        if (!isAuthenticated) {
           res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Unauthorized: Invalid or missing authentication token" }));
+          res.end(JSON.stringify({ error: "Unauthorized: Valid session cookie or Authorization header required" }));
           return;
+        }
+
+        // Set HttpOnly session cookie on authenticated requests if not yet set
+        if (!sessionToken && isAuthenticated) {
+          res.setHeader("Set-Cookie", `agentshield_session=${authToken}; HttpOnly; SameSite=Strict; Path=/`);
         }
 
         if (reqUrl.pathname === "/api/report") {
@@ -67,13 +87,19 @@ export class DashboardServer {
           return;
         }
 
-        // Render Sanitized Dashboard UI HTML
+        // Render Sanitized Dashboard UI HTML with immediate URL token stripping
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <title>AgentShield Ultimate Security Dashboard</title>
+  <script>
+    // F-010 Defense: Immediately strip bearer credentials from URL bar & history
+    if (window.location.search && window.location.search.includes('token=')) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  </script>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 24px; }
     .card { background: #1e293b; border-radius: 8px; padding: 20px; margin-bottom: 20px; border: 1px solid #334155; }

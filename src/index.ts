@@ -10,6 +10,8 @@ export * from "./secret-guard";
 export * from "./command-guard";
 export * from "./download-guard";
 export * from "./approval-engine";
+export * from "./red-team";
+export * from "./workspace-scanner";
 export * from "./reporting";
 export * from "./dashboard";
 export * from "./remediation";

@@ -58,6 +58,16 @@
       "import": "./dist/src/approval-engine/index.js",
       "require": "./dist/src/approval-engine/index.js"
     },
+    "./red-team": {
+      "types": "./dist/src/red-team/index.d.ts",
+      "import": "./dist/src/red-team/index.js",
+      "require": "./dist/src/red-team/index.js"
+    },
+    "./workspace-scanner": {
+      "types": "./dist/src/workspace-scanner/index.d.ts",
+      "import": "./dist/src/workspace-scanner/index.js",
+      "require": "./dist/src/workspace-scanner/index.js"
+    },
     "./sdk": {
       "types": "./dist/src/sdk/index.d.ts",
       "import": "./dist/src/sdk/index.js",
@@ -68,6 +78,7 @@
     "dist/src",
     "skills",
     "integrations",
+    "scripts",
     "LICENSE",
     "README.md",
     "ATTRIBUTION.md",
@@ -77,9 +88,9 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "node --test dist/tests/**/*.test.js",
-    "lint": "node -e \"console.log('Linting passed: clean TypeScript codebase')\"",
+    "lint": "node scripts/lint.js",
     "clean": "node -e \"const fs = require('fs'); if (fs.existsSync('dist')) fs.rmSync('dist', { recursive: true, force: true });\"",
-    "start": "node dist/cli/index.js",
+    "start": "node dist/src/cli/index.js",
     "prepack": "npm run build"
   },
   "keywords": [

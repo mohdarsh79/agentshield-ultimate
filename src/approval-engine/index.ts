@@ -12,17 +12,29 @@ export interface ApprovalRequest {
   expiresAt: number;
   status: "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED";
   reason: string;
+  resolvedBy?: string;
+  resolvedAt?: number;
 }
 
 export class ApprovalEngine {
   private requests: Map<string, ApprovalRequest> = new Map();
   private defaultTtlMs: number;
+  private maxRequests: number;
 
-  constructor(defaultTtlSeconds: number = 300) {
+  constructor(defaultTtlSeconds: number = 300, maxRequests: number = 1000) {
     this.defaultTtlMs = defaultTtlSeconds * 1000;
+    this.maxRequests = maxRequests;
   }
 
   public createRequest(ctx: AgentActionContext, reason: string): ApprovalRequest {
+    this.cleanupExpired();
+
+    // Bounded storage protection: evict oldest if at capacity
+    if (this.requests.size >= this.maxRequests) {
+      const oldestKey = this.requests.keys().next().value;
+      if (oldestKey) this.requests.delete(oldestKey);
+    }
+
     const id = crypto.randomUUID();
     const token = crypto.randomBytes(32).toString("hex");
     const parametersHash = this.computeParamsHash(ctx);
@@ -45,7 +57,7 @@ export class ApprovalEngine {
     return request;
   }
 
-  public resolveRequest(token: string, approved: boolean): boolean {
+  public resolveRequest(token: string, approved: boolean, approver: string = "human-operator"): boolean {
     const req = this.requests.get(token);
     if (!req) return false;
 
@@ -55,6 +67,8 @@ export class ApprovalEngine {
     }
 
     req.status = approved ? "APPROVED" : "REJECTED";
+    req.resolvedBy = approver;
+    req.resolvedAt = Date.now();
     return true;
   }
 
@@ -86,6 +100,46 @@ export class ApprovalEngine {
     this.requests.delete(token);
 
     return { valid: true };
+  }
+
+  public getPendingRequests(): ApprovalRequest[] {
+    this.cleanupExpired();
+    return Array.from(this.requests.values()).filter(r => r.status === "PENDING");
+  }
+
+  public getRequest(tokenOrId: string): ApprovalRequest | undefined {
+    const req = this.requests.get(tokenOrId);
+    if (req) return req;
+    for (const r of this.requests.values()) {
+      if (r.id === tokenOrId) return r;
+    }
+    return undefined;
+  }
+
+  public cleanupExpired(): number {
+    const now = Date.now();
+    let cleaned = 0;
+    for (const [token, req] of this.requests.entries()) {
+      if (now > req.expiresAt) {
+        this.requests.delete(token);
+        cleaned++;
+      }
+    }
+    return cleaned;
+  }
+
+  public exportState(): ApprovalRequest[] {
+    this.cleanupExpired();
+    return Array.from(this.requests.values());
+  }
+
+  public importState(requests: ApprovalRequest[]): void {
+    const now = Date.now();
+    for (const req of requests) {
+      if (req.expiresAt > now) {
+        this.requests.set(req.token, req);
+      }
+    }
   }
 
   // Recursive Canonical Object Normalizer for deterministic JSON hashing

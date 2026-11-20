@@ -29,7 +29,8 @@ export class RiskEngine {
       SKILL: 0,
       DOWNLOAD: 0,
       SUPPLY_CHAIN: 0,
-      CONFIGURATION: 0
+      CONFIGURATION: 0,
+      APPROVAL: 0
     };
 
     let totalPenalty = 0;

@@ -13,7 +13,8 @@ export type SecurityCategory =
   | "SKILL"
   | "DOWNLOAD"
   | "SUPPLY_CHAIN"
-  | "CONFIGURATION";
+  | "CONFIGURATION"
+  | "APPROVAL";
 
 export type PolicyProfile = "strict" | "balanced" | "dev";
 
@@ -37,17 +38,20 @@ export interface SecurityEvaluationResult {
   blockedReason?: string;
   requiresApproval?: boolean;
   approvalToken?: string;
+  approvalRequest?: unknown;
   findings: SecurityFinding[];
   scorePenalty: number;
 }
 
 export interface AgentActionContext {
-  actionType: "file_read" | "file_write" | "file_delete" | "command_execute" | "browser_click" | "browser_navigate" | "network_request" | "mcp_tool_call" | "download";
+  actionType: "file_read" | "file_write" | "file_delete" | "command_execute" | "browser_click" | "browser_navigate" | "network_request" | "mcp_tool_call" | "download" | "financial_transfer" | string;
   actor: string;
   target: string;
-  parameters: Record<string, unknown>;
+  parameters?: Record<string, unknown>;
   content?: string;
   metadata?: Record<string, unknown>;
+  approvalToken?: string;
+  approver?: string;
 }
 
 export interface PolicyRule {
@@ -68,4 +72,10 @@ export interface SecurityScoreReport {
   byCategory: Record<SecurityCategory, number>;
   findings: SecurityFinding[];
   timestamp: string;
+  coverage?: {
+    filesInspected: number;
+    filesSkipped: number;
+    durationMs: number;
+    scannersActive: string[];
+  };
 }

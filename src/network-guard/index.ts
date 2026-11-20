@@ -1,3 +1,4 @@
+import * as dns from "dns";
 import { SecurityFinding, AgentActionContext, SecurityEvaluationResult } from "../types";
 
 export interface NetworkPolicyOptions {
@@ -26,7 +27,6 @@ export class NetworkGuard {
       const normalizedIp = this.normalizeIpAddress(rawHostname);
 
       // 1. Cloud Instance Metadata Endpoint Defense (Critical SSRF)
-      // Catches 169.254.169.254, 169.254.0.0/16 link-local, fd00:ec2::254, 100.100.100.200, or wildcard domains
       const isCloudMetadata = 
         this.METADATA_HOSTNAMES.includes(rawHostname) ||
         rawHostname.includes("169.254.169.254") ||
@@ -150,6 +150,110 @@ export class NetworkGuard {
         scorePenalty: 5
       };
     }
+  }
+
+  // Asynchronous evaluation with live DNS resolution to prevent DNS rebinding & hidden SSRF
+  public static async evaluateRequestAsync(
+    ctx: AgentActionContext,
+    options: NetworkPolicyOptions = { allowLocalhost: false }
+  ): Promise<SecurityEvaluationResult> {
+    // Run sync checks first
+    const syncResult = this.evaluateRequest(ctx, options);
+    if (!syncResult.allowed) return syncResult;
+
+    const targetUrl = String(ctx.parameters?.url || ctx.target);
+    try {
+      const parsed = new URL(targetUrl);
+      const hostname = parsed.hostname;
+
+      // If it's already an IP literal, sync check already validated it
+      if (this.isIpLiteral(hostname)) {
+        return syncResult;
+      }
+
+      // Perform live DNS lookup across A and AAAA records
+      const resolved = await dns.promises.lookup(hostname, { all: true });
+      for (const record of resolved) {
+        const ip = record.address;
+        const norm = this.normalizeIpAddress(ip) || ip;
+
+        if (this.isLinkLocal(norm) || norm === "169.254.169.254" || norm === "100.100.100.200" || norm === "fd00:ec2::254") {
+          return {
+            allowed: false,
+            blockedReason: `DNS resolution of '${hostname}' resolved to prohibited cloud metadata IP: ${ip}`,
+            findings: [{
+              id: `FIND-NET-DNS-META-${Date.now().toString(36)}`,
+              severity: "CRITICAL",
+              confidence: "CERTAIN",
+              category: "NETWORK",
+              title: "SSRF via DNS Resolution to Metadata",
+              evidence: `Domain '${hostname}' resolves to cloud metadata endpoint '${ip}'`,
+              affectedResource: targetUrl,
+              impact: "Cloud metadata credential exfiltration via DNS rebinding or custom domains.",
+              mitigation: "Validate all resolved IP addresses before connection dispatch.",
+              standardReference: "CWE-918 / DNS Rebinding",
+              remediationStatus: "OPEN",
+              timestamp: new Date().toISOString()
+            }],
+            scorePenalty: 25
+          };
+        }
+
+        if (!options.allowLocalhost && (norm === "127.0.0.1" || norm === "::1" || norm.startsWith("127.") || norm === "0.0.0.0")) {
+          return {
+            allowed: false,
+            blockedReason: `DNS resolution of '${hostname}' resolved to local loopback interface: ${ip}`,
+            findings: [{
+              id: `FIND-NET-DNS-LOOP-${Date.now().toString(36)}`,
+              severity: "HIGH",
+              confidence: "CERTAIN",
+              category: "NETWORK",
+              title: "SSRF via DNS Resolution to Loopback",
+              evidence: `Domain '${hostname}' resolves to loopback IP '${ip}'`,
+              affectedResource: targetUrl,
+              impact: "Access to unauthenticated localhost services via domain redirection.",
+              mitigation: "Block loopback destinations post-DNS resolution.",
+              standardReference: "CWE-918",
+              remediationStatus: "OPEN",
+              timestamp: new Date().toISOString()
+            }],
+            scorePenalty: 15
+          };
+        }
+
+        if (this.isPrivateIp(norm)) {
+          return {
+            allowed: false,
+            blockedReason: `DNS resolution of '${hostname}' resolved to internal private subnet IP: ${ip}`,
+            findings: [{
+              id: `FIND-NET-DNS-RFC1918-${Date.now().toString(36)}`,
+              severity: "HIGH",
+              confidence: "CERTAIN",
+              category: "NETWORK",
+              title: "SSRF via DNS Resolution to Private Network",
+              evidence: `Domain '${hostname}' resolves to internal IP '${ip}'`,
+              affectedResource: targetUrl,
+              impact: "Internal network mapping via DNS names pointing to private subnets.",
+              mitigation: "Drop connections to private RFC-1918 ranges.",
+              standardReference: "CWE-918 / RFC-1918",
+              remediationStatus: "OPEN",
+              timestamp: new Date().toISOString()
+            }],
+            scorePenalty: 15
+          };
+        }
+      }
+
+      return syncResult;
+    } catch {
+      // Inability to resolve domain or network error -> fail closed or safe pass depending on policy
+      return syncResult;
+    }
+  }
+
+  private static isIpLiteral(hostname: string): boolean {
+    const clean = hostname.replace(/[\[\]]/g, "");
+    return /^(\d{1,3}\.){3}\d{1,3}$/.test(clean) || clean.includes(":");
   }
 
   // Normalizes IPv6-mapped IPv4, brackets, hex/octal representations

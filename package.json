@@ -1,6 +1,6 @@
 {
   "name": "agentshield-ultimate",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Universal Zero-Trust AI Agent Security Framework: Runtime Enforcement, Skill Scanning, Browser Guard, MCP Protection, and Cryptographic Approvals",
   "main": "./dist/src/index.js",
   "types": "./dist/src/index.d.ts",

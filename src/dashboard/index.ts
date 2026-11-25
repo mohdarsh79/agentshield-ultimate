@@ -38,19 +38,23 @@ export class DashboardServer {
     preferredPort: number = 3840,
     auditLogger?: AuditLogger
   ): Promise<DashboardInstance> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const authToken = crypto.randomBytes(32).toString("hex");
       const logger = auditLogger || new AuditLogger();
 
       const server = http.createServer((req, res) => {
-        // Security Headers
+        // AS-24: Explicit cache controls preventing credential or dashboard leak
+        res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+        res.setHeader("Pragma", "no-cache");
+        res.setHeader("Expires", "0");
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("X-Frame-Options", "DENY");
         res.setHeader("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self';");
 
-        // Validate Host Header to prevent DNS rebinding
-        const host = req.headers.host || "";
-        if (!host.startsWith("127.0.0.1") && !host.startsWith("localhost")) {
+        // AS-24: Exact Host Header validation
+        const rawHost = req.headers.host || "";
+        const hostname = rawHost.split(":")[0].toLowerCase();
+        if (hostname !== "127.0.0.1" && hostname !== "localhost") {
           res.writeHead(403, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: "Forbidden: Invalid Host header" }));
           return;
@@ -95,7 +99,7 @@ export class DashboardServer {
   <meta charset="UTF-8">
   <title>AgentShield Ultimate Security Dashboard</title>
   <script>
-    // F-010 Defense: Immediately strip bearer credentials from URL bar & history
+    // Immediately strip credentials from URL bar & history
     if (window.location.search && window.location.search.includes('token=')) {
       window.history.replaceState({}, document.title, window.location.pathname);
     }
@@ -144,16 +148,40 @@ export class DashboardServer {
 </html>`);
       });
 
+      // Attach error listener before listen call to reject promise on port bind failure (AS-24)
+      server.once("error", (err) => {
+        reject(err);
+      });
+
       server.listen(preferredPort, "127.0.0.1", () => {
-        const addr = server.address();
-        const port = typeof addr === "object" && addr ? addr.port : preferredPort;
-        const url = `http://127.0.0.1:${port}/?token=${authToken}`;
+        const address = server.address();
+        const actualPort = typeof address === "object" && address ? address.port : preferredPort;
+        const url = `http://127.0.0.1:${actualPort}/?token=${authToken}`;
+
         resolve({
           server,
-          port,
+          port: actualPort,
           authToken,
           url,
-          stop: () => new Promise<void>((res) => server.close(() => res()))
+          stop: () => new Promise<void>((resStop) => {
+            let stopped = false;
+            const done = () => {
+              if (!stopped) {
+                stopped = true;
+                resStop();
+              }
+            };
+            try {
+              if (typeof (server as any).closeAllConnections === "function") {
+                (server as any).closeAllConnections();
+              }
+              if (typeof (server as any).closeIdleConnections === "function") {
+                (server as any).closeIdleConnections();
+              }
+            } catch {}
+            server.close(() => done());
+            setTimeout(done, 500).unref();
+          })
         });
       });
     });

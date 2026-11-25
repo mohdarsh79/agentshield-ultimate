@@ -20,7 +20,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Run AgentShield Scan
-        run: node dist/cli/index.js scan --sarif > agentshield.sarif
+        run: node dist/src/cli/index.js scan --sarif > agentshield.sarif
       - name: Upload SARIF to GitHub Code Scanning
         uses: github/codeql-action/upload-sarif@v3
         with:

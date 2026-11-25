@@ -1,5 +1,5 @@
 import * as fs from "fs";
-import { SecurityFinding, Severity } from "../types";
+import { SecurityFinding, Severity, AgentActionContext, SecurityEvaluationResult } from "../types";
 
 export interface McpToolDefinition {
   name: string;
@@ -26,6 +26,41 @@ export class McpGuard {
     { regex: /send\s+(credentials|tokens|passwords|secrets|\.env)\s+to/i, severity: "CRITICAL", name: "Exfiltration Tool Directive" },
     { regex: /ignore\s+previous\s+instructions/i, severity: "CRITICAL", name: "Prompt Injection in Tool Schema" }
   ];
+
+  // Runtime Tool Call Interception (AS-06 / AS-18)
+  public static evaluateToolCall(ctx: AgentActionContext): SecurityEvaluationResult {
+    const findings: SecurityFinding[] = [];
+    const toolName = String(ctx.target || ctx.parameters?.toolName || "");
+    const paramsStr = JSON.stringify(ctx.parameters || {});
+
+    // Check for prompt injection or covert directives embedded in tool call parameters
+    for (const pat of this.POISON_DESCRIPTION_PATTERNS) {
+      if (pat.regex.test(toolName) || pat.regex.test(paramsStr)) {
+        findings.push({
+          id: `FIND-MCP-POISON-${Date.now().toString(36)}`,
+          severity: pat.severity,
+          confidence: "CERTAIN",
+          category: "MCP",
+          title: `Malicious MCP Tool Invocation Blocked: ${pat.name}`,
+          evidence: `MCP tool execution context matches poisoning pattern '${pat.name}'`,
+          affectedResource: `mcp_tool:${toolName}`,
+          impact: "Adversarial tool hijacking, prompt injection, or unauthorized covert data exfiltration.",
+          mitigation: "Reject tool execution and quarantine compromised MCP server definition.",
+          standardReference: "OWASP-LLM07 / Tool Poisoning",
+          remediationStatus: "OPEN",
+          timestamp: new Date().toISOString()
+        });
+        return {
+          allowed: false,
+          blockedReason: `MCP tool call blocked due to detected adversarial signature: ${pat.name}`,
+          findings,
+          scorePenalty: 25
+        };
+      }
+    }
+
+    return { allowed: true, findings, scorePenalty: 0 };
+  }
 
   public static auditServerConfig(serverName: string, config: McpServerConfig): SecurityFinding[] {
     const findings: SecurityFinding[] = [];
@@ -79,11 +114,11 @@ export class McpGuard {
         severity: "MEDIUM",
         confidence: "HIGH",
         category: "MCP",
-        title: `MCP Server Spawned Via Raw Shell: ${serverName}`,
-        evidence: `Server command executes directly via shell binary '${config.command}'.`,
+        title: `Raw Shell Used as MCP Command: ${serverName}`,
+        evidence: `Server command is configured to invoke raw shell '${config.command}'.`,
         affectedResource: `mcp_server:${serverName}`,
-        impact: "Expands potential shell argument injection surface.",
-        mitigation: "Invoke direct binary executables directly without shell intermediaries.",
+        impact: "Increases risk of shell injection if arguments are dynamically formulated.",
+        mitigation: "Invoke standalone compiled binary executables with direct arguments rather than raw shells.",
         standardReference: "CWE-78 / Command Execution",
         remediationStatus: "OPEN",
         timestamp: new Date().toISOString()
@@ -98,19 +133,18 @@ export class McpGuard {
     const desc = tool.description || "";
 
     for (const pat of this.POISON_DESCRIPTION_PATTERNS) {
-      const match = desc.match(pat.regex);
-      if (match) {
+      if (pat.regex.test(desc)) {
         findings.push({
           id: `FIND-MCP-POISON-${Date.now().toString(36)}`,
           severity: pat.severity,
           confidence: "HIGH",
           category: "MCP",
-          title: `Poisoned MCP Tool Description: ${tool.name}`,
-          evidence: `Matched poison pattern: "${match[0]}" in tool '${tool.name}' from server '${serverName}'`,
+          title: `MCP Tool Description Poisoning Detected: ${tool.name}`,
+          evidence: `Tool description matches suspicious pattern '${pat.name}': "${desc.substring(0, 80)}..."`,
           affectedResource: `mcp_tool:${serverName}/${tool.name}`,
-          impact: "Attempts to manipulate agent reasoning or hijack autonomous tool invocation order.",
-          mitigation: "Sanitize tool descriptions and reject third-party MCP servers with coercive descriptions.",
-          standardReference: "OWASP-MCP-Security / MITRE-AML.T0040",
+          impact: "Adversarial instructions in tool description hijack LLM reasoning during tool selection.",
+          mitigation: "Sanitize tool descriptions and disallow imperative prompt injection directives.",
+          standardReference: "OWASP-LLM07 / Insecure Plugin Design",
           remediationStatus: "OPEN",
           timestamp: new Date().toISOString()
         });
@@ -125,16 +159,15 @@ export class McpGuard {
     if (!fs.existsSync(filePath)) return findings;
 
     try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      const mcpServers = parsed.mcpServers || parsed;
+      const content = fs.readFileSync(filePath, "utf-8");
+      const config = JSON.parse(content);
+      const servers = config.mcpServers || config.servers || {};
 
-      if (typeof mcpServers === "object") {
-        for (const [name, config] of Object.entries(mcpServers)) {
-          findings.push(...this.auditServerConfig(name, config as McpServerConfig));
-        }
+      for (const [name, serverConf] of Object.entries(servers)) {
+        findings.push(...this.auditServerConfig(name, serverConf as McpServerConfig));
       }
     } catch {
-      // Non-blocking parse error
+      // Return empty if unparseable
     }
 
     return findings;

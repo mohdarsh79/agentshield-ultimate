@@ -31,3 +31,5 @@ export class SecurityEventBus extends EventEmitter {
     }
   }
 }
+
+export { SecurityEventBus as EventBus };

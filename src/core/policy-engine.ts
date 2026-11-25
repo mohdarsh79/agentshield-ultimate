@@ -1,30 +1,22 @@
-import { 
-  PolicyProfile, 
-  PolicyRule, 
-  AgentActionContext, 
-  SecurityEvaluationResult, 
-  SecurityFinding,
-  Severity 
-} from "../types";
-import { SecurityEventBus } from "./event-bus";
+import { PolicyProfile, PolicyRule, AgentActionContext, SecurityEvaluationResult, SecurityFinding, Severity } from "../types";
+import { EventBus } from "./event-bus";
 import { AuditLogger } from "./audit-logger";
 
 export class PolicyEngine {
-  private profile: PolicyProfile;
   private rules: PolicyRule[] = [];
-  private eventBus: SecurityEventBus;
-  private auditLogger: AuditLogger;
+  private profile: PolicyProfile;
+  public eventBus: EventBus;
+  public auditLogger: AuditLogger;
 
-  constructor(profile: PolicyProfile = "strict", customLogger?: AuditLogger) {
+  constructor(profile: PolicyProfile = "strict", auditLogger?: AuditLogger) {
     this.profile = profile;
-    this.eventBus = SecurityEventBus.getInstance();
-    this.auditLogger = customLogger || new AuditLogger();
+    this.eventBus = EventBus.getInstance();
+    this.auditLogger = auditLogger || new AuditLogger();
     this.registerDefaultRules();
   }
 
   public setProfile(profile: PolicyProfile): void {
     this.profile = profile;
-    this.eventBus.emit("policy:reloaded", { profile });
   }
 
   public getProfile(): PolicyProfile {
@@ -46,13 +38,13 @@ export class PolicyEngine {
       enforceAction: "require_approval",
       evaluate: (ctx) => {
         const targetStr = (ctx.target + " " + JSON.stringify(ctx.parameters)).toLowerCase();
-        const triggers = ["stripe", "paypal", "buy", "purchase", "wire", "transfer_funds", "crypto_send"];
+        const triggers = ["stripe", "paypal", "buy", "purchase", "wire", "transfer_funds", "crypto_send", "stripe_charge"];
         const matched = triggers.some(t => targetStr.includes(t));
         return { matched, details: matched ? "Financial keyword detected in action target/parameters" : undefined };
       }
     });
 
-    // 2. Secret File Access Protection
+    // 2. Sensitive File Access Protection
     this.addRule({
       id: "POL-FS-001",
       name: "Sensitive Credential File Isolation",
@@ -69,7 +61,43 @@ export class PolicyEngine {
       }
     });
 
-    // 3. Ad and Sponsored Link Click Protection
+    // 3. Destructive File Deletion Approval Rule (AS-05 / AS-17)
+    this.addRule({
+      id: "POL-FS-DEL-001",
+      name: "File Deletion Safeguard",
+      category: "FILESYSTEM",
+      severity: "HIGH",
+      description: "Deleting files requires explicit human authorization.",
+      enforceAction: "require_approval",
+      evaluate: (ctx) => {
+        if (ctx.actionType === "file_delete" || (ctx.actionType.startsWith("file_") && ctx.target.includes("delete"))) {
+          return { matched: true, details: `File deletion requested on target: ${ctx.target}` };
+        }
+        return { matched: false };
+      }
+    });
+
+    // 4. Software Installation & Package Manager Approval Rule (AS-05 / AS-17)
+    this.addRule({
+      id: "POL-CMD-INSTALL-001",
+      name: "Package Installation Safeguard",
+      category: "COMMAND",
+      severity: "HIGH",
+      description: "Installing packages or running software installers requires human authorization.",
+      enforceAction: "require_approval",
+      evaluate: (ctx) => {
+        if (ctx.actionType === "command_execute") {
+          const cmd = String(ctx.parameters?.command || ctx.target).toLowerCase();
+          const isInstall = /\b(npm\s+(i|install|add)|pip\s+install|apt(-get)?\s+install|brew\s+install|yarn\s+add)\b/.test(cmd);
+          if (isInstall) {
+            return { matched: true, details: `Software package installation detected: ${cmd}` };
+          }
+        }
+        return { matched: false };
+      }
+    });
+
+    // 5. Ad and Sponsored Link Click Protection
     this.addRule({
       id: "POL-BRW-001",
       name: "Advertisement and Sponsored Result Prevention",
@@ -122,10 +150,11 @@ export class PolicyEngine {
             scorePenalty += this.getSeverityPenalty(rule.severity);
             break; // Immediate fail-closed
           } else if (rule.enforceAction === "require_approval") {
-            if (this.profile === "strict" || this.profile === "balanced") {
+            // Under dev profile, still enforce approval for financial actions or warn explicitly
+            if (this.profile === "strict" || this.profile === "balanced" || rule.id === "POL-FIN-001") {
               requiresApproval = true;
               allowed = false;
-              blockedReason = "Requires human-in-the-loop cryptographic approval";
+              blockedReason = evalResult.details || "Requires human-in-the-loop cryptographic approval";
             }
           }
         }
@@ -149,18 +178,15 @@ export class PolicyEngine {
       scorePenalty
     };
 
-    this.auditLogger.logAction(ctx, result);
-    this.eventBus.emitActionEvaluation(ctx, result);
-
     return result;
   }
 
-  private getSeverityPenalty(sev: Severity): number {
-    switch (sev) {
+  private getSeverityPenalty(severity: Severity): number {
+    switch (severity) {
       case "CRITICAL": return 25;
       case "HIGH": return 15;
-      case "MEDIUM": return 5;
-      case "LOW": return 1;
+      case "MEDIUM": return 10;
+      case "LOW": return 5;
       default: return 0;
     }
   }

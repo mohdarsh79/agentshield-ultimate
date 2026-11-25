@@ -29,7 +29,7 @@ export interface SecurityFinding {
   impact: string;
   mitigation: string;
   standardReference: string;
-  remediationStatus: "OPEN" | "REMEDIATED" | "IGNORED";
+  remediationStatus: "OPEN" | "REMEDIATED" | "IGNORED" | "ACTION_REQUIRED";
   timestamp: string;
 }
 
@@ -48,10 +48,7 @@ export interface AgentActionContext {
   actor: string;
   target: string;
   parameters?: Record<string, unknown>;
-  content?: string;
-  metadata?: Record<string, unknown>;
   approvalToken?: string;
-  approver?: string;
 }
 
 export interface PolicyRule {
@@ -60,18 +57,19 @@ export interface PolicyRule {
   category: SecurityCategory;
   severity: Severity;
   description: string;
-  enforceAction: "block" | "warn" | "require_approval" | "allow";
+  enforceAction: "block" | "require_approval" | "warn";
   evaluate: (ctx: AgentActionContext) => { matched: boolean; details?: string };
 }
 
 export interface SecurityScoreReport {
+  timestamp: string;
   score: number;
-  grade: "A+" | "A" | "B" | "C" | "D" | "F";
+  grade: "A+" | "A" | "B" | "C" | "D" | "F" | string;
   totalFindings: number;
+  findings: SecurityFinding[];
   bySeverity: Record<Severity, number>;
   byCategory: Record<SecurityCategory, number>;
-  findings: SecurityFinding[];
-  timestamp: string;
+  categoryScores?: Record<SecurityCategory, number>;
   coverage?: {
     filesInspected: number;
     filesSkipped: number;
@@ -79,3 +77,12 @@ export interface SecurityScoreReport {
     scannersActive: string[];
   };
 }
+
+export interface AgentShieldConfig {
+  workspaceRoot?: string;
+  auditLogPath?: string;
+  profile?: PolicyProfile;
+  defaultApprovalTtlSeconds?: number;
+}
+
+export type CategoryScores = Record<SecurityCategory, number>;

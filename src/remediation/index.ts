@@ -11,12 +11,16 @@ export interface RemediationResult {
 
 export class RemediationEngine {
   private backupDir: string;
+  private workspaceRoot: string;
+  private trackedCreations: Set<string> = new Set();
 
   constructor(workspaceRoot: string = process.cwd()) {
-    this.backupDir = path.join(workspaceRoot, ".agentshield_backup", Date.now().toString());
+    this.workspaceRoot = path.resolve(workspaceRoot);
+    this.backupDir = path.join(this.workspaceRoot, ".agentshield_backup", Date.now().toString());
   }
 
-  public remediate(findings: SecurityFinding[], workspaceRoot: string = process.cwd()): RemediationResult {
+  public remediate(findings: SecurityFinding[], workspaceRoot: string = this.workspaceRoot): RemediationResult {
+    const ws = path.resolve(workspaceRoot);
     const actionsTaken: string[] = [];
     const remediatedFindings: SecurityFinding[] = [];
     let remediatedCount = 0;
@@ -29,9 +33,10 @@ export class RemediationEngine {
     for (const finding of findings) {
       if (finding.category === "FILESYSTEM" && finding.affectedResource.includes(".env")) {
         // Safe Remediation: Add .env to .gitignore if missing
-        const gitignorePath = path.join(workspaceRoot, ".gitignore");
-        if (this.backupFile(gitignorePath)) {
-          let gitignore = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf-8") : "";
+        const gitignorePath = path.join(ws, ".gitignore");
+        const existedBefore = fs.existsSync(gitignorePath);
+        if (this.backupFile(gitignorePath, existedBefore)) {
+          let gitignore = existedBefore ? fs.readFileSync(gitignorePath, "utf-8") : "";
           if (!gitignore.includes(".env")) {
             gitignore += "\n# Added by AgentShield Ultimate remediation\n.env\n.env.*\n";
             fs.writeFileSync(gitignorePath, gitignore, "utf-8");
@@ -43,11 +48,11 @@ export class RemediationEngine {
         }
       }
 
+      // AS-09: Do NOT mark MCP secret as REMEDIATED unless configuration was actually modified
       if (finding.category === "MCP" && finding.title.includes("Hardcoded Secret")) {
-        actionsTaken.push(`Marked ${finding.affectedResource} for secret externalization into environment variables.`);
-        finding.remediationStatus = "REMEDIATED";
-        remediatedFindings.push(finding);
-        remediatedCount++;
+        // Mark as ACTION_REQUIRED since automated secret extraction requires manual secret manager integration
+        finding.remediationStatus = "ACTION_REQUIRED";
+        actionsTaken.push(`Marked ${finding.affectedResource} for operator action: externalize secret into environment variables.`);
       }
     }
 
@@ -59,22 +64,40 @@ export class RemediationEngine {
     };
   }
 
+  // AS-16: Rollback restores strictly into configured workspaceRoot, NOT process.cwd()
   public rollback(): boolean {
     if (!fs.existsSync(this.backupDir)) return false;
+
+    // 1. Remove files that were newly created during remediation
+    for (const createdRel of this.trackedCreations) {
+      const createdPath = path.join(this.workspaceRoot, createdRel);
+      if (fs.existsSync(createdPath)) {
+        try {
+          fs.unlinkSync(createdPath);
+        } catch {
+          // Ignore delete errors
+        }
+      }
+    }
+
+    // 2. Restore backed-up files into workspaceRoot
     const files = fs.readdirSync(this.backupDir);
     for (const f of files) {
       const src = path.join(this.backupDir, f);
-      const dest = path.join(process.cwd(), f);
+      const dest = path.join(this.workspaceRoot, f);
       fs.copyFileSync(src, dest);
     }
     return true;
   }
 
-  private backupFile(targetPath: string): boolean {
+  private backupFile(targetPath: string, existed: boolean): boolean {
     try {
-      if (fs.existsSync(targetPath)) {
+      if (existed && fs.existsSync(targetPath)) {
         const dest = path.join(this.backupDir, path.basename(targetPath));
         fs.copyFileSync(targetPath, dest);
+      } else {
+        // Track that file was created by remediation so rollback can delete it
+        this.trackedCreations.add(path.relative(this.workspaceRoot, targetPath));
       }
       return true;
     } catch {

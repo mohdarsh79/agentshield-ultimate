@@ -8,3 +8,5 @@ coverage/
 .env
 .env.*
 !.env.example
+.agentshield/approvals.json
+.agentshield_backup/

@@ -10,18 +10,18 @@ export class CommandGuard {
     { regex: /\bcurl\s+[^|\n]+\|\s*(ba|z)?sh/i, name: "Uninspected Remote Script Pipeline", severity: "CRITICAL", impact: "Executes unverified remote script with local permissions." }
   ];
 
-  // Metacharacters used for command injection and command chaining
-  private static readonly FORBIDDEN_CHAINING_PATTERNS = [
-    /;/g,
-    /&&/g,
-    /\|\|/g,
-    /\|/g,
-    /`/g,
-    /\$\(/g,
-    /\r/g,
-    /\n/g,
+  // Metacharacters used for command injection and command chaining (WITHOUT /g to avoid lastIndex state issues)
+  private static readonly FORBIDDEN_CHAINING_PATTERNS: RegExp[] = [
+    /;/,
+    /&&/,
+    /\|\|/,
+    /\|/,
+    /`/,
+    /\$\(/,
+    /\r/,
+    /\n/,
     // Single & when not preceded or followed by & or >
-    /(?<![&>])&(?!&)/g
+    /(?<![&>])&(?!&)/
   ];
 
   public static evaluateCommand(ctx: AgentActionContext, allowShellChaining: boolean = false): SecurityEvaluationResult {
@@ -56,31 +56,34 @@ export class CommandGuard {
       }
     }
 
-    // 2. Uncontrolled Shell Injection Chaining Check (including single &, ;, |, newlines)
+    // 2. Uncontrolled Shell Injection Chaining Check (State-free evaluation)
     if (!allowShellChaining) {
-      const matchedPattern = this.FORBIDDEN_CHAINING_PATTERNS.find(pat => pat.test(command));
-      if (matchedPattern) {
-        const finding: SecurityFinding = {
-          id: `FIND-CMD-CHAIN-${Date.now().toString(36)}`,
-          severity: "HIGH",
-          confidence: "MEDIUM",
-          category: "COMMAND",
-          title: "Shell Command Chaining Metacharacters Detected",
-          evidence: `Command string contains forbidden shell chaining or backgrounding operators: "${command}"`,
-          affectedResource: "os:command_line",
-          impact: "Potential shell injection or hidden secondary command execution.",
-          mitigation: "Execute singular atomic commands with structured argument arrays.",
-          standardReference: "CWE-78 / Shell Injection",
-          remediationStatus: "OPEN",
-          timestamp: new Date().toISOString()
-        };
-        findings.push(finding);
-        return {
-          allowed: false,
-          blockedReason: "Command chaining, subshells, newlines, and backgrounding operators are prohibited by default",
-          findings,
-          scorePenalty: 15
-        };
+      for (const pat of this.FORBIDDEN_CHAINING_PATTERNS) {
+        // Create fresh regex or ensure lastIndex is reset to prevent stateful alternation
+        const isMatched = new RegExp(pat.source, pat.flags.replace("g", "")).test(command);
+        if (isMatched) {
+          const finding: SecurityFinding = {
+            id: `FIND-CMD-CHAIN-${Date.now().toString(36)}`,
+            severity: "HIGH",
+            confidence: "MEDIUM",
+            category: "COMMAND",
+            title: "Shell Command Chaining Metacharacters Detected",
+            evidence: `Command string contains forbidden shell chaining or backgrounding operators: "${command}"`,
+            affectedResource: "os:command_line",
+            impact: "Potential shell injection or hidden secondary command execution.",
+            mitigation: "Execute singular atomic commands with structured argument arrays.",
+            standardReference: "CWE-78 / Shell Injection",
+            remediationStatus: "OPEN",
+            timestamp: new Date().toISOString()
+          };
+          findings.push(finding);
+          return {
+            allowed: false,
+            blockedReason: "Command chaining, subshells, newlines, and backgrounding operators are prohibited by default",
+            findings,
+            scorePenalty: 15
+          };
+        }
       }
     }
 

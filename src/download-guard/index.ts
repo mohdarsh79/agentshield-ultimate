@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as crypto from "crypto";
-import { SecurityFinding, Severity } from "../types";
+import * as path from "path";
+import { SecurityFinding, Severity, AgentActionContext, SecurityEvaluationResult } from "../types";
 
 export interface FileAnalysisResult {
   isSafe: boolean;
@@ -17,6 +18,57 @@ export class DownloadGuard {
     { magic: Buffer.from([0xCA, 0xFE, 0xBA, 0xBE]), name: "Mach-O Universal Binary", severity: "CRITICAL" },
     { magic: Buffer.from([0xCF, 0xFA, 0xED, 0xFE]), name: "Mach-O 64-bit Binary", severity: "CRITICAL" }
   ];
+
+  private static readonly RESTRICTED_EXTENSIONS = new Set([
+    ".exe", ".dll", ".so", ".dylib", ".elf", ".bin", ".bat", ".cmd", ".vbs", ".ps1"
+  ]);
+
+  // Runtime Download Interception (AS-06)
+  public static evaluateDownload(ctx: AgentActionContext): SecurityEvaluationResult {
+    const findings: SecurityFinding[] = [];
+    const targetUrlOrPath = String(ctx.parameters?.url || ctx.parameters?.path || ctx.target);
+    const ext = path.extname(targetUrlOrPath.split("?")[0]).toLowerCase();
+
+    // 1. Extension inspection
+    if (this.RESTRICTED_EXTENSIONS.has(ext)) {
+      const finding: SecurityFinding = {
+        id: `FIND-DL-EXT-${Date.now().toString(36)}`,
+        severity: "CRITICAL",
+        confidence: "CERTAIN",
+        category: "DOWNLOAD",
+        title: `Restricted Binary/Script Download Blocked: ${ext}`,
+        evidence: `Download destination or URL '${targetUrlOrPath}' specifies prohibited executable extension '${ext}'`,
+        affectedResource: targetUrlOrPath,
+        impact: "Arbitrary binary execution or malicious script delivery into host workspace.",
+        mitigation: "Block download of compiled executables and shell scripts.",
+        standardReference: "CWE-434 / Download of Dangerous File Type",
+        remediationStatus: "OPEN",
+        timestamp: new Date().toISOString()
+      };
+      findings.push(finding);
+      return {
+        allowed: false,
+        blockedReason: `Download of executable binary or script with extension '${ext}' is prohibited`,
+        findings,
+        scorePenalty: 25
+      };
+    }
+
+    // 2. If target is a local file already downloaded, inspect magic bytes
+    if (fs.existsSync(targetUrlOrPath)) {
+      const analysis = this.inspectDownloadedFile(targetUrlOrPath);
+      if (!analysis.isSafe) {
+        return {
+          allowed: false,
+          blockedReason: "Downloaded file contains dangerous executable magic bytes signature",
+          findings: analysis.findings,
+          scorePenalty: 25
+        };
+      }
+    }
+
+    return { allowed: true, findings, scorePenalty: 0 };
+  }
 
   public static inspectDownloadedFile(filePath: string): FileAnalysisResult {
     const findings: SecurityFinding[] = [];
@@ -78,7 +130,7 @@ export class DownloadGuard {
               affectedResource: packageJsonPath,
               impact: "Automatic remote execution during package installation (npm install).",
               mitigation: "Inspect lifecycle scripts and run installations with '--ignore-scripts'.",
-              standardReference: "CWE-506 / OpenSSF Supply Chain",
+              standardReference: "OWASP-LLM03 / Supply-Chain Attack",
               remediationStatus: "OPEN",
               timestamp: new Date().toISOString()
             });
@@ -86,7 +138,7 @@ export class DownloadGuard {
         }
       }
     } catch {
-      // Non-blocking parse error
+      // Graceful error ignore on unparseable JSON
     }
 
     return findings;

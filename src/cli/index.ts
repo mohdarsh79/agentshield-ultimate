@@ -42,18 +42,25 @@ async function runCli(): Promise<void> {
     }
 
     case "scan": {
-      console.log("\n[*] Running comprehensive AgentShield multi-vector workspace scan...");
+      const isMachineOutput = args.includes("--json") || args.includes("--sarif");
+      if (isMachineOutput) {
+        // AS-13: Send status log to stderr so stdout is 100% valid standalone JSON/SARIF
+        process.stderr.write("[*] Running comprehensive AgentShield multi-vector workspace scan...\n");
+      } else {
+        console.log("\n[*] Running comprehensive AgentShield multi-vector workspace scan...");
+      }
+
       const report = shield.scanWorkspace();
       const format = args.includes("--json") ? "json" : args.includes("--sarif") ? "sarif" : args.includes("--md") ? "md" : "ansi";
 
       if (format === "json") {
-        console.log(SecurityReporter.toJson(report));
+        process.stdout.write(SecurityReporter.toJson(report) + "\n");
       } else if (format === "sarif") {
-        console.log(SecurityReporter.toSarif(report));
+        process.stdout.write(SecurityReporter.toSarif(report) + "\n");
       } else if (format === "md") {
-        console.log(SecurityReporter.toMarkdown(report));
+        process.stdout.write(SecurityReporter.toMarkdown(report) + "\n");
       } else {
-        console.log(SecurityReporter.toAnsi(report));
+        process.stdout.write(SecurityReporter.toAnsi(report) + "\n");
       }
       break;
     }
@@ -125,7 +132,23 @@ async function runCli(): Promise<void> {
       const newProfile = args[1] as "strict" | "balanced" | "dev";
       if (newProfile && ["strict", "balanced", "dev"].includes(newProfile)) {
         shield.policyEngine.setProfile(newProfile);
-        console.log(`\n[✓] Switched active policy profile to: ${newProfile}\n`);
+        
+        // AS-14: Persist policy profile changes to .agentshield/config.json
+        const configDir = path.join(process.cwd(), ".agentshield");
+        if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+        const configPath = path.join(configDir, "config.json");
+        let currentConfig: Record<string, unknown> = {};
+        if (fs.existsSync(configPath)) {
+          try {
+            currentConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+          } catch {
+            currentConfig = {};
+          }
+        }
+        currentConfig.profile = newProfile;
+        fs.writeFileSync(configPath, JSON.stringify(currentConfig, null, 2), "utf-8");
+
+        console.log(`\n[✓] Switched and persisted active policy profile to: ${newProfile}\n`);
       } else {
         console.log(`\nCurrent Policy Profile: ${shield.policyEngine.getProfile()}`);
         console.log("Available profiles: strict | balanced | dev\n");
@@ -139,56 +162,50 @@ async function runCli(): Promise<void> {
       console.log("=======================================================");
       const list = UniversalAgentAdapterRegistry.listAll();
       for (const item of list) {
-        console.log(` - ${item.name.padEnd(16)} : ${item.support}`);
+        console.log(` • ${item.name.padEnd(20)}: ${item.support}`);
       }
       console.log("=======================================================\n");
       break;
     }
 
-    case "report": {
-      const report = shield.scanWorkspace();
-      const outputPath = args[1] || "agentshield-report.md";
-      fs.writeFileSync(outputPath, SecurityReporter.toMarkdown(report), "utf-8");
-      console.log(`\n[✓] Exported security report to: ${outputPath}\n`);
-      break;
-    }
-
     case "dashboard": {
-      console.log("\n[*] Launching embedded authenticated Security Dashboard...");
+      const preferredPort = args[1] ? parseInt(args[1], 10) : 3840;
+      console.log("\n[*] Initiating AgentShield Local Security Dashboard...");
       const report = shield.scanWorkspace();
-      const inst = await DashboardServer.start(report, 4173, shield.auditLogger);
-      console.log(`[✓] Dashboard live at: ${inst.url}`);
-      console.log("    Press Ctrl+C to terminate server.\n");
+      const inst = await DashboardServer.start(report, preferredPort, shield.auditLogger);
+      console.log(`\n=======================================================`);
+      console.log(` AGENTSHIELD ULTIMATE SECURE DASHBOARD ONLINE`);
+      console.log(`=======================================================`);
+      console.log(` Access URL   : ${inst.url}`);
+      console.log(` Bound Port   : ${inst.port}`);
+      console.log(` Session Token: ${inst.authToken}`);
+      console.log(` Security     : HttpOnly cookie session auth & local-only host binding`);
+      console.log(` Press Ctrl+C to terminate dashboard server.`);
+      console.log(`=======================================================\n`);
       break;
     }
 
-    case "help":
     default: {
       console.log(`
-AgentShield Ultimate CLI - Universal AI Agent Security Framework
-
+AgentShield Ultimate — Autonomous AI Agent Security Framework (CLI)
 Usage: agentshield <command> [options]
 
 Commands:
-  init            Initialize AgentShield configuration in current workspace
-  scan            Scan workspace skills, MCP configs, package scripts, and credentials
-  audit           Audit runtime configuration and tamper-evident event log
-  checkup         Quick security posture assessment
-  threat-model    Display STRIDE threat model and trust boundaries
-  red-team        Execute adversarial attack simulation suite
-  fix             Safely apply automated remediations with rollback backup
-  policy <name>   View or switch policy profile (strict | balanced | dev)
-  integrations    List supported agent integrations and support tiers
-  report [path]   Export security report to Markdown file
-  dashboard       Start local authenticated web dashboard
-  version         Display package version
+  scan [--json|--sarif|--md]  Run comprehensive multi-vector workspace security scan
+  audit                       Audit runtime security configuration and action logs
+  red-team                    Execute live adversarial red-team simulation suite
+  threat-model                Display active trust boundaries and mitigation matrix
+  fix                         Automatically remediate discovered configuration flaws
+  policy <strict|balanced|dev> Persist and configure active runtime policy profile
+  integrations                List supported autonomous agent integrations
+  dashboard [port]            Launch local zero-trust security monitoring web UI
+  version                     Display installed AgentShield framework version
 `);
-      break;
     }
   }
 }
 
 runCli().catch((err) => {
-  console.error("AgentShield Fatal Error:", err);
+  process.stderr.write(`[!] Fatal error: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(1);
 });

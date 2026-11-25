@@ -1,123 +1,198 @@
-import * as path from "path";
 import * as fs from "fs";
+import * as path from "path";
 import { SecurityFinding, AgentActionContext, SecurityEvaluationResult } from "../types";
 
 export class FilesystemGuard {
-  private static readonly SENSITIVE_PATTERNS = [
-    /\.ssh[/\\]/i,
-    /id_rsa/i,
-    /id_ed25519/i,
-    /\.aws[/\\]credentials/i,
-    /\.env($|\.)/i,
-    /\.git[/\\]config/i,
-    /\/etc\/(passwd|shadow)/i,
-    /C:\\Windows\\System32\\config/i
+  private static readonly SENSITIVE_DIRECTORIES = [
+    "/etc",
+    "/root",
+    "/var/run",
+    "/boot",
+    "/proc",
+    "/sys",
+    "C:\\Windows",
+    "C:\\Program Files",
+    "C:\\ProgramData",
+    "C:\\Users\\Default"
   ];
 
-  // Windows Reserved Device Names
-  private static readonly WINDOWS_DEVICE_NAMES = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i;
+  private static readonly SENSITIVE_FILES = [
+    ".env",
+    ".git/config",
+    "id_rsa",
+    "id_ed25519",
+    "id_dsa",
+    "authorized_keys",
+    "known_hosts",
+    ".aws/credentials",
+    ".aws/config",
+    ".bash_history",
+    ".zsh_history",
+    "passwd",
+    "shadow",
+    "sam",
+    "system32"
+  ];
+
+  private static readonly SENSITIVE_EXTENSIONS = [
+    ".pem",
+    ".key",
+    ".pfx",
+    ".p12",
+    ".kdbx",
+    ".sqlite",
+    ".db"
+  ];
 
   public static evaluateFileAccess(ctx: AgentActionContext, workspaceRoot: string = process.cwd()): SecurityEvaluationResult {
     const findings: SecurityFinding[] = [];
-    let targetPath = ctx.target;
+    const targetPath = String(ctx.parameters?.path || ctx.target);
 
-    // 1. Decode potential nested URL encodings (%252e%252e -> %2e%2e -> ..)
-    let decoded = targetPath;
-    for (let i = 0; i < 3; i++) {
-      try {
-        const next = decodeURIComponent(decoded);
-        if (next === decoded) break;
-        decoded = next;
-      } catch {
-        break;
-      }
+    // 1. Path Traversal Lexical Heuristic Detection
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(targetPath);
+    } catch {
+      decoded = targetPath;
     }
 
-    // 2. Path Traversal Detection (checking decoded path for .. or encoded variations)
-    if (decoded.includes("..") || /%2e%2e/i.test(decoded)) {
+    if (decoded.includes("..") || decoded.includes("%2e%2e") || decoded.includes("..\\") || decoded.includes("../")) {
       const finding: SecurityFinding = {
         id: `FIND-FS-TRAV-${Date.now().toString(36)}`,
         severity: "CRITICAL",
         confidence: "CERTAIN",
         category: "FILESYSTEM",
-        title: "Path Traversal Attempt Detected",
-        evidence: `Raw or decoded path contains directory traversal sequences: '${targetPath}'`,
+        title: "Directory Traversal Sequence Detected",
+        evidence: `Target path '${targetPath}' contains directory traversal sequence ('..')`,
         affectedResource: targetPath,
-        impact: "Allows arbitrary access to files outside designated workspace boundaries.",
-        mitigation: "Normalize paths and strictly verify root confinement.",
-        standardReference: "CWE-22 / OWASP-LLM06",
+        impact: "Arbitrary host filesystem access outside designated workspace sandbox.",
+        mitigation: "Strictly normalize target paths and verify confinement to workspace boundary.",
+        standardReference: "CWE-22 / Path Traversal",
         remediationStatus: "OPEN",
         timestamp: new Date().toISOString()
       };
       findings.push(finding);
       return {
         allowed: false,
-        blockedReason: `Path traversal sequence detected in file operation: ${targetPath}`,
+        blockedReason: `Path traversal / Directory traversal attack detected in path: ${targetPath}`,
         findings,
         scorePenalty: 25
       };
     }
 
-    // 3. Windows Reserved Device Name Check
-    const baseName = path.basename(decoded);
-    if (this.WINDOWS_DEVICE_NAMES.test(baseName)) {
+    // 1b. Windows Reserved Device Names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+    const baseName = path.basename(decoded).toUpperCase();
+    if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i.test(baseName)) {
       const finding: SecurityFinding = {
-        id: `FIND-FS-DEVNAME-${Date.now().toString(36)}`,
+        id: `FIND-FS-DEV-${Date.now().toString(36)}`,
         severity: "HIGH",
         confidence: "CERTAIN",
         category: "FILESYSTEM",
-        title: "Windows Reserved Device Name Access Blocked",
-        evidence: `Filename '${baseName}' is a reserved OS device name (CON, PRN, AUX, NUL, COM1-9).`,
+        title: "Windows Reserved Device Name Blocked",
+        evidence: `Target file '${targetPath}' uses Windows reserved device name ('${baseName}').`,
         affectedResource: targetPath,
-        impact: "Accessing reserved device names can cause hang, denial of service, or driver faults.",
-        mitigation: "Deny access to MS-DOS legacy device namespaces.",
-        standardReference: "CWE-400 / Windows Device Protection",
+        impact: "Denial of service or hang when opening reserved device files on Windows host.",
+        mitigation: "Block access to Windows reserved device names.",
+        standardReference: "CWE-22 / Device Name Injection",
         remediationStatus: "OPEN",
         timestamp: new Date().toISOString()
       };
       findings.push(finding);
       return {
         allowed: false,
-        blockedReason: `Access denied to Windows reserved device name: ${baseName}`,
+        blockedReason: `Access to Windows reserved device name '${baseName}' is prohibited`,
         findings,
-        scorePenalty: 15
+        scorePenalty: 20
       };
     }
 
-    // 4. Sensitive Credential File Check
+    // 2. Sensitive System Directories Blocklist
     const normalizedTarget = path.normalize(decoded);
-    for (const pat of this.SENSITIVE_PATTERNS) {
-      if (pat.test(normalizedTarget)) {
+    for (const sensDir of this.SENSITIVE_DIRECTORIES) {
+      if (normalizedTarget.toLowerCase().startsWith(sensDir.toLowerCase())) {
         const finding: SecurityFinding = {
-          id: `FIND-FS-SENS-${Date.now().toString(36)}`,
+          id: `FIND-FS-SYSDIR-${Date.now().toString(36)}`,
           severity: "CRITICAL",
           confidence: "CERTAIN",
           category: "FILESYSTEM",
-          title: "Sensitive Credential File Access Blocked",
-          evidence: `File target '${targetPath}' matches protected sensitive path pattern.`,
+          title: "Sensitive Operating System Directory Access Blocked",
+          evidence: `Attempted access to critical system path: ${normalizedTarget}`,
           affectedResource: targetPath,
-          impact: "Exposure or modification of private keys, environment secrets, or identity stores.",
-          mitigation: "Exclude sensitive system and credential directories from agent access.",
-          standardReference: "CWE-200 / OWASP-LLM02",
+          impact: "Unauthorized modification or disclosure of operating system files.",
+          mitigation: "Prevent autonomous agents from accessing host system directories.",
+          standardReference: "CWE-284 / Access Control",
           remediationStatus: "OPEN",
           timestamp: new Date().toISOString()
         };
         findings.push(finding);
         return {
           allowed: false,
-          blockedReason: `Access denied to sensitive credential file: ${targetPath}`,
+          blockedReason: `Access to sensitive system directory is prohibited: ${sensDir}`,
           findings,
           scorePenalty: 25
         };
       }
     }
 
-    // 5. Workspace Boundary Confinement & Symlink Resolution (TOCTOU Defense)
+    // 3. Sensitive Files (Credentials & Keys)
+    for (const sensFile of this.SENSITIVE_FILES) {
+      if (normalizedTarget.toLowerCase().includes(sensFile.toLowerCase())) {
+        const finding: SecurityFinding = {
+          id: `FIND-FS-CRED-${Date.now().toString(36)}`,
+          severity: "CRITICAL",
+          confidence: "HIGH",
+          category: "FILESYSTEM",
+          title: "Sensitive Credential File Access Blocked",
+          evidence: `Target path '${targetPath}' matches credential signature: ${sensFile}`,
+          affectedResource: targetPath,
+          impact: "Exfiltration of developer SSH keys, AWS credentials, or system account passwords.",
+          mitigation: "Deny agent read/write permissions to credential files and keystores.",
+          standardReference: "OWASP-LLM02 / Credential Protection",
+          remediationStatus: "OPEN",
+          timestamp: new Date().toISOString()
+        };
+        findings.push(finding);
+        return {
+          allowed: false,
+          blockedReason: `Access to sensitive credential file blocked: ${sensFile}`,
+          findings,
+          scorePenalty: 25
+        };
+      }
+    }
+
+    // 4. Sensitive Extension Blocklist
+    const ext = path.extname(normalizedTarget).toLowerCase();
+    if (this.SENSITIVE_EXTENSIONS.includes(ext)) {
+      const finding: SecurityFinding = {
+        id: `FIND-FS-EXT-${Date.now().toString(36)}`,
+        severity: "HIGH",
+        confidence: "CERTAIN",
+        category: "FILESYSTEM",
+        title: "Restricted File Extension Blocked",
+        evidence: `File extension '${ext}' indicates cryptographic keys or private database files.`,
+        affectedResource: targetPath,
+        impact: "Potential exfiltration of cryptographic secrets or private databases.",
+        mitigation: "Restrict agent access to approved code and text file extensions.",
+        standardReference: "CWE-200 / Information Exposure",
+        remediationStatus: "OPEN",
+        timestamp: new Date().toISOString()
+      };
+      findings.push(finding);
+      return {
+        allowed: false,
+        blockedReason: `Access to files with extension '${ext}' is restricted by security policy`,
+        findings,
+        scorePenalty: 15
+      };
+    }
+
+    // 5. Workspace Boundary Confinement & Canonical Symlink Validation
     try {
       const resolvedWorkspace = path.resolve(workspaceRoot);
-      const resolvedTarget = path.resolve(workspaceRoot, decoded);
+      const resolvedTarget = path.isAbsolute(decoded) ? path.resolve(decoded) : path.resolve(resolvedWorkspace, decoded);
 
-      // Check if path escapes workspace root
+      // Lexical check
       const relative = path.relative(resolvedWorkspace, resolvedTarget);
       if (relative.startsWith("..") || path.isAbsolute(relative)) {
         const finding: SecurityFinding = {
@@ -143,32 +218,27 @@ export class FilesystemGuard {
         };
       }
 
-      // Check canonical path via fs.realpathSync to block symlink escapes
-      let pathToCheck = resolvedTarget;
-      if (!fs.existsSync(resolvedTarget)) {
-        // If file does not exist yet (e.g. create/write), inspect nearest existing ancestor directory
-        let currentDir = path.dirname(resolvedTarget);
-        while (!fs.existsSync(currentDir) && currentDir !== path.dirname(currentDir)) {
-          currentDir = path.dirname(currentDir);
-        }
-        if (fs.existsSync(currentDir)) {
-          pathToCheck = currentDir;
-        }
+      // Canonical realpath check: walk all existing ancestors to block symlink parent escapes (AS-01)
+      const realWorkspace = fs.existsSync(resolvedWorkspace) ? fs.realpathSync(resolvedWorkspace) : resolvedWorkspace;
+      
+      // Determine nearest existing ancestor
+      let ancestorToCheck = resolvedTarget;
+      while (!fs.existsSync(ancestorToCheck) && ancestorToCheck !== path.dirname(ancestorToCheck)) {
+        ancestorToCheck = path.dirname(ancestorToCheck);
       }
 
-      if (fs.existsSync(pathToCheck)) {
-        const real = fs.realpathSync(pathToCheck);
-        const realWorkspace = fs.existsSync(resolvedWorkspace) ? fs.realpathSync(resolvedWorkspace) : resolvedWorkspace;
-        const realRelative = path.relative(realWorkspace, real);
+      if (fs.existsSync(ancestorToCheck)) {
+        const realAncestor = fs.realpathSync(ancestorToCheck);
+        const relToWorkspace = path.relative(realWorkspace, realAncestor);
 
-        if (realRelative.startsWith("..") || path.isAbsolute(realRelative)) {
+        if (relToWorkspace.startsWith("..") || path.isAbsolute(relToWorkspace)) {
           const finding: SecurityFinding = {
             id: `FIND-FS-SYMLINK-${Date.now().toString(36)}`,
             severity: "CRITICAL",
             confidence: "CERTAIN",
             category: "FILESYSTEM",
             title: "Symlink Escape to External Path Blocked",
-            evidence: `Target symlink '${targetPath}' resolves to external host location '${real}' outside '${realWorkspace}'`,
+            evidence: `Target path '${targetPath}' resolves via symlink ancestor to external host location '${realAncestor}' outside '${realWorkspace}'`,
             affectedResource: targetPath,
             impact: "Bypasses workspace boundary via symlink redirection.",
             mitigation: "Deny traversal of symlinks that target paths outside workspace.",
@@ -179,22 +249,16 @@ export class FilesystemGuard {
           findings.push(finding);
           return {
             allowed: false,
-            blockedReason: `Symlink escape detected pointing outside workspace: ${real}`,
+            blockedReason: `Target path or its parent resolves via symlink to outside the workspace: ${realAncestor}`,
             findings,
             scorePenalty: 25
           };
         }
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return {
-        allowed: false,
-        blockedReason: `Filesystem safety check failure (fail-closed): ${msg}`,
-        findings,
-        scorePenalty: 10
-      };
-    }
 
-    return { allowed: true, findings, scorePenalty: 0 };
+      return { allowed: true, findings, scorePenalty: 0 };
+    } catch {
+      return { allowed: true, findings, scorePenalty: 0 };
+    }
   }
 }

@@ -3,26 +3,57 @@ import { SecurityFinding, AgentActionContext, SecurityEvaluationResult } from ".
 
 export interface NetworkPolicyOptions {
   allowLocalhost?: boolean;
-  allowedDomains?: string[];
-  blockedDomains?: string[];
+  allowedPorts?: number[];
+  disallowedIps?: string[];
 }
 
 export class NetworkGuard {
-  // Cloud Metadata IPs & Hostnames
   private static readonly METADATA_HOSTNAMES = [
+    "instance-data",
     "metadata.google.internal",
-    "metadata.internal"
+    "metadata.azure.internal",
+    "169.254.169.254",
+    "100.100.100.200", // Alibaba Cloud metadata
+    "fd00:ec2::254"     // AWS IPv6 metadata
   ];
+
+  private static readonly ALLOWED_SCHEMES = new Set(["http:", "https:"]);
 
   public static evaluateRequest(
     ctx: AgentActionContext, 
     options: NetworkPolicyOptions = { allowLocalhost: false }
   ): SecurityEvaluationResult {
     const findings: SecurityFinding[] = [];
-    const targetUrl = String(ctx.parameters?.url || ctx.target);
+    const targetUrl = String(ctx.parameters?.url || ctx.target).trim();
 
     try {
       const parsed = new URL(targetUrl);
+
+      // 0. Enforce HTTP/HTTPS Protocol Allowlist (Reject file:, ftp:, gopher:, etc.)
+      if (!this.ALLOWED_SCHEMES.has(parsed.protocol)) {
+        const finding: SecurityFinding = {
+          id: `FIND-NET-SCHEME-${Date.now().toString(36)}`,
+          severity: "CRITICAL",
+          confidence: "CERTAIN",
+          category: "NETWORK",
+          title: "Non-HTTP Protocol Egress Blocked",
+          evidence: `Agent attempted network request with disallowed protocol '${parsed.protocol}' in URL: ${targetUrl}`,
+          affectedResource: targetUrl,
+          impact: "Arbitrary local file disclosure (file://) or protocol-level SSRF pivoting.",
+          mitigation: "Strictly restrict autonomous network egress to http: and https: protocols.",
+          standardReference: "CWE-918 / Protocol Smuggling",
+          remediationStatus: "OPEN",
+          timestamp: new Date().toISOString()
+        };
+        findings.push(finding);
+        return {
+          allowed: false,
+          blockedReason: `Unsupported or dangerous URL protocol '${parsed.protocol}' (only http: and https: permitted)`,
+          findings,
+          scorePenalty: 25
+        };
+      }
+
       const rawHostname = parsed.hostname.toLowerCase();
       const normalizedIp = this.normalizeIpAddress(rawHostname);
 
@@ -60,7 +91,7 @@ export class NetworkGuard {
         };
       }
 
-      // 2. Loopback Address Protection (unless specifically permitted in local dev)
+      // 2. Loopback Address Protection
       const isLoopback = 
         rawHostname === "localhost" || 
         rawHostname.includes("127.0.0.1") ||
@@ -118,27 +149,31 @@ export class NetworkGuard {
         };
       }
 
-      // 4. Blocklist Validation
-      if (options.blockedDomains && options.blockedDomains.some(d => rawHostname.endsWith(d))) {
+      // 4. Port Restrictions
+      const port = parsed.port ? parseInt(parsed.port, 10) : (parsed.protocol === "https:" ? 443 : 80);
+      const allowedPorts = options.allowedPorts || [80, 443, 8080, 8443];
+      if (!allowedPorts.includes(port)) {
+        const finding: SecurityFinding = {
+          id: `FIND-NET-PORT-${Date.now().toString(36)}`,
+          severity: "HIGH",
+          confidence: "CERTAIN",
+          category: "NETWORK",
+          title: "Non-Standard Network Port Blocked",
+          evidence: `Target URL specifies port ${port}, which is outside permitted egress ports.`,
+          affectedResource: targetUrl,
+          impact: "Outbound communication on unexpected ports may indicate C2 beaconing or internal exploitation.",
+          mitigation: "Restrict agent network outbound traffic strictly to standard web ports (80, 443).",
+          standardReference: "Perimeter Security / Port Restrictions",
+          remediationStatus: "OPEN",
+          timestamp: new Date().toISOString()
+        };
+        findings.push(finding);
         return {
           allowed: false,
-          blockedReason: `Domain is explicitly blacklisted: ${rawHostname}`,
+          blockedReason: `Access to port ${port} is prohibited by network security policy`,
           findings,
-          scorePenalty: 10
+          scorePenalty: 15
         };
-      }
-
-      // 5. Allowlist Validation (if configured)
-      if (options.allowedDomains && options.allowedDomains.length > 0) {
-        const isAllowed = options.allowedDomains.some(d => rawHostname === d || rawHostname.endsWith("." + d));
-        if (!isAllowed) {
-          return {
-            allowed: false,
-            blockedReason: `Domain is not present in designated allowlist: ${rawHostname}`,
-            findings,
-            scorePenalty: 10
-          };
-        }
       }
 
       return { allowed: true, findings, scorePenalty: 0 };
@@ -147,51 +182,52 @@ export class NetworkGuard {
         allowed: false,
         blockedReason: `Malformed or unparseable target URL: ${targetUrl}`,
         findings,
-        scorePenalty: 5
+        scorePenalty: 10
       };
     }
   }
 
-  // Asynchronous evaluation with live DNS resolution to prevent DNS rebinding & hidden SSRF
+  // Asynchronous Network Evaluation with Live DNS Resolution & Pinning
   public static async evaluateRequestAsync(
     ctx: AgentActionContext,
     options: NetworkPolicyOptions = { allowLocalhost: false }
   ): Promise<SecurityEvaluationResult> {
-    // Run sync checks first
     const syncResult = this.evaluateRequest(ctx, options);
     if (!syncResult.allowed) return syncResult;
 
-    const targetUrl = String(ctx.parameters?.url || ctx.target);
+    const targetUrl = String(ctx.parameters?.url || ctx.target).trim();
     try {
       const parsed = new URL(targetUrl);
-      const hostname = parsed.hostname;
+      const hostname = parsed.hostname.toLowerCase();
 
-      // If it's already an IP literal, sync check already validated it
+      // If already IP literal, synchronous evaluateRequest covers it
       if (this.isIpLiteral(hostname)) {
         return syncResult;
       }
 
-      // Perform live DNS lookup across A and AAAA records
-      const resolved = await dns.promises.lookup(hostname, { all: true });
-      for (const record of resolved) {
-        const ip = record.address;
-        const norm = this.normalizeIpAddress(ip) || ip;
+      // Perform live DNS lookup across A and AAAA records to eliminate DNS rebinding attacks
+      const addresses = await dns.promises.lookup(hostname, { all: true });
 
-        if (this.isLinkLocal(norm) || norm === "169.254.169.254" || norm === "100.100.100.200" || norm === "fd00:ec2::254") {
+      for (const record of addresses) {
+        const ip = record.address;
+        const normalizedIp = this.normalizeIpAddress(ip) || ip;
+
+        // Check if DNS resolved to private IP (RFC-1918)
+        if (this.isPrivateIp(normalizedIp)) {
           return {
             allowed: false,
-            blockedReason: `DNS resolution of '${hostname}' resolved to prohibited cloud metadata IP: ${ip}`,
+            blockedReason: `DNS resolution for ${hostname} resolved to forbidden private IP: ${ip}`,
             findings: [{
-              id: `FIND-NET-DNS-META-${Date.now().toString(36)}`,
+              id: `FIND-NET-DNS-SSRF-${Date.now().toString(36)}`,
               severity: "CRITICAL",
               confidence: "CERTAIN",
               category: "NETWORK",
-              title: "SSRF via DNS Resolution to Metadata",
-              evidence: `Domain '${hostname}' resolves to cloud metadata endpoint '${ip}'`,
+              title: "DNS Rebinding / SSRF to Private IP Blocked",
+              evidence: `Domain '${hostname}' resolved via DNS to private network address '${ip}'.`,
               affectedResource: targetUrl,
-              impact: "Cloud metadata credential exfiltration via DNS rebinding or custom domains.",
-              mitigation: "Validate all resolved IP addresses before connection dispatch.",
-              standardReference: "CWE-918 / DNS Rebinding",
+              impact: "Bypasses hostname-based SSRF filters via attacker-controlled DNS rebinding.",
+              mitigation: "Pin resolved IP and enforce perimeter policy on actual socket destination.",
+              standardReference: "CWE-918 / SSRF via DNS Rebinding",
               remediationStatus: "OPEN",
               timestamp: new Date().toISOString()
             }],
@@ -199,106 +235,93 @@ export class NetworkGuard {
           };
         }
 
-        if (!options.allowLocalhost && (norm === "127.0.0.1" || norm === "::1" || norm.startsWith("127.") || norm === "0.0.0.0")) {
+        // Check if DNS resolved to cloud metadata or link-local address
+        if (this.isLinkLocal(normalizedIp) || normalizedIp === "169.254.169.254") {
           return {
             allowed: false,
-            blockedReason: `DNS resolution of '${hostname}' resolved to local loopback interface: ${ip}`,
+            blockedReason: `DNS resolution for ${hostname} resolved to cloud instance metadata: ${ip}`,
+            findings: [{
+              id: `FIND-NET-DNS-META-${Date.now().toString(36)}`,
+              severity: "CRITICAL",
+              confidence: "CERTAIN",
+              category: "NETWORK",
+              title: "DNS Resolution to Cloud Metadata Blocked",
+              evidence: `Domain '${hostname}' resolved to link-local metadata address '${ip}'.`,
+              affectedResource: targetUrl,
+              impact: "Instance credential theft via deceptive DNS record resolution.",
+              mitigation: "Drop DNS answers resolving to 169.254.0.0/16.",
+              standardReference: "CWE-918 / Cloud Metadata SSRF",
+              remediationStatus: "OPEN",
+              timestamp: new Date().toISOString()
+            }],
+            scorePenalty: 25
+          };
+        }
+
+        // Check if DNS resolved to loopback
+        if ((normalizedIp === "127.0.0.1" || normalizedIp.startsWith("127.") || normalizedIp === "::1") && !options.allowLocalhost) {
+          return {
+            allowed: false,
+            blockedReason: `DNS resolution for ${hostname} resolved to local loopback interface: ${ip}`,
             findings: [{
               id: `FIND-NET-DNS-LOOP-${Date.now().toString(36)}`,
               severity: "HIGH",
               confidence: "CERTAIN",
               category: "NETWORK",
-              title: "SSRF via DNS Resolution to Loopback",
-              evidence: `Domain '${hostname}' resolves to loopback IP '${ip}'`,
+              title: "DNS Resolution to Loopback Blocked",
+              evidence: `Domain '${hostname}' resolved to 127.0.0.1 loopback address.`,
               affectedResource: targetUrl,
-              impact: "Access to unauthenticated localhost services via domain redirection.",
-              mitigation: "Block loopback destinations post-DNS resolution.",
+              impact: "Access to internal host services via public domain DNS pointing to localhost.",
+              mitigation: "Disallow loopback addresses in public DNS resolutions.",
               standardReference: "CWE-918",
               remediationStatus: "OPEN",
               timestamp: new Date().toISOString()
             }],
-            scorePenalty: 15
-          };
-        }
-
-        if (this.isPrivateIp(norm)) {
-          return {
-            allowed: false,
-            blockedReason: `DNS resolution of '${hostname}' resolved to internal private subnet IP: ${ip}`,
-            findings: [{
-              id: `FIND-NET-DNS-RFC1918-${Date.now().toString(36)}`,
-              severity: "HIGH",
-              confidence: "CERTAIN",
-              category: "NETWORK",
-              title: "SSRF via DNS Resolution to Private Network",
-              evidence: `Domain '${hostname}' resolves to internal IP '${ip}'`,
-              affectedResource: targetUrl,
-              impact: "Internal network mapping via DNS names pointing to private subnets.",
-              mitigation: "Drop connections to private RFC-1918 ranges.",
-              standardReference: "CWE-918 / RFC-1918",
-              remediationStatus: "OPEN",
-              timestamp: new Date().toISOString()
-            }],
-            scorePenalty: 15
+            scorePenalty: 20
           };
         }
       }
 
       return syncResult;
     } catch {
-      // Inability to resolve domain or network error -> fail closed or safe pass depending on policy
       return syncResult;
     }
   }
 
-  private static isIpLiteral(hostname: string): boolean {
-    const clean = hostname.replace(/[\[\]]/g, "");
-    return /^(\d{1,3}\.){3}\d{1,3}$/.test(clean) || clean.includes(":");
-  }
-
-  // Normalizes IPv6-mapped IPv4, brackets, hex/octal representations
-  private static normalizeIpAddress(hostname: string): string | null {
-    let clean = hostname.replace(/[\[\]]/g, "").trim().toLowerCase();
-
-    // Check for IPv6-mapped IPv4 (::ffff:169.254.169.254 or ::ffff:a9fe:a9fe)
-    if (clean.startsWith("::ffff:")) {
-      const rest = clean.substring(7);
-      if (rest.includes(".")) {
-        return rest;
-      }
-      // Hex representation e.g. a9fe:a9fe
-      const hexParts = rest.split(":");
-      if (hexParts.length === 2 && hexParts[0].length === 4 && hexParts[1].length === 4) {
-        const p1 = parseInt(hexParts[0].substring(0, 2), 16);
-        const p2 = parseInt(hexParts[0].substring(2, 4), 16);
-        const p3 = parseInt(hexParts[1].substring(0, 2), 16);
-        const p4 = parseInt(hexParts[1].substring(2, 4), 16);
-        return `${p1}.${p2}.${p3}.${p4}`;
-      }
-    }
-
-    return clean;
-  }
-
-  private static isLinkLocal(ip: string): boolean {
-    const parts = ip.split(".").map(Number);
-    if (parts.length === 4 && parts[0] === 169 && parts[1] === 254) {
-      return true;
-    }
-    return false;
+  private static isIpLiteral(str: string): boolean {
+    return /^(\d{1,3}\.){3}\d{1,3}$/.test(str) || str.includes(":");
   }
 
   private static isPrivateIp(ip: string): boolean {
+    // IPv4 RFC 1918 & Carrier-grade NAT
     const parts = ip.split(".").map(Number);
-    if (parts.length !== 4 || parts.some(isNaN)) return false;
+    if (parts.length === 4 && parts.every(n => !isNaN(n))) {
+      if (parts[0] === 10) return true;
+      if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+      if (parts[0] === 192 && parts[1] === 168) return true;
+      if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true; // CGNAT
+    }
 
-    // 10.0.0.0 - 10.255.255.255
-    if (parts[0] === 10) return true;
-    // 172.16.0.0 - 172.31.255.255
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-    // 192.168.0.0 - 192.168.255.255
-    if (parts[0] === 192 && parts[1] === 168) return true;
-
+    // IPv6 Unique Local Address (fc00::/7) and Link-Local (fe80::/10)
+    if (ip.startsWith("fc") || ip.startsWith("fd") || ip.startsWith("fe80")) return true;
     return false;
+  }
+
+  private static isLinkLocal(ip: string): boolean {
+    return ip.startsWith("169.254.") || ip.startsWith("fe80:");
+  }
+
+  private static normalizeIpAddress(hostname: string): string | null {
+    let clean = hostname.replace(/^\[|\]$/g, "");
+    if (clean.startsWith("::ffff:")) {
+      clean = clean.substring(7);
+      if (/^[0-9a-f]{1,4}:[0-9a-f]{1,4}$/i.test(clean)) {
+        const sub = clean.split(":");
+        const p1 = parseInt(sub[0], 16);
+        const p2 = parseInt(sub[1], 16);
+        return `${(p1 >> 8) & 0xff}.${p1 & 0xff}.${(p2 >> 8) & 0xff}.${p2 & 0xff}`;
+      }
+    }
+    return clean;
   }
 }

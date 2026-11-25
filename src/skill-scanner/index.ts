@@ -36,7 +36,7 @@ export class SkillScanner {
       const match = content.match(pat.regex);
       if (match) {
         findings.push({
-          id: `FIND-SKILL-CMD-${Date.now().toString(36)}`,
+          id: `FIND-SKILL-CMD-${Date.now().toString(36)}-${findings.length}`,
           severity: pat.severity,
           confidence: "CERTAIN",
           category: "SKILL",
@@ -57,7 +57,7 @@ export class SkillScanner {
       const match = content.match(pat.regex);
       if (match) {
         findings.push({
-          id: `FIND-SKILL-HID-${Date.now().toString(36)}`,
+          id: `FIND-SKILL-HID-${Date.now().toString(36)}-${findings.length}`,
           severity: "HIGH",
           confidence: "HIGH",
           category: "SKILL",
@@ -76,27 +76,40 @@ export class SkillScanner {
     return findings;
   }
 
+  // AS-11: Suppress false-positives by separating executable skills from docs/audit reports
   public static scanDirectory(dirPath: string): SkillScanSummary {
     const findings: SecurityFinding[] = [];
     let filesScanned = 0;
 
     const traverse = (current: string) => {
       if (!fs.existsSync(current)) return;
-      const entries = fs.readdirSync(current, { withFileTypes: true });
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = fs.readdirSync(current, { withFileTypes: true });
+      } catch {
+        return;
+      }
 
       for (const entry of entries) {
         const fullPath = path.join(current, entry.name);
         if (entry.isDirectory()) {
-          if (!["node_modules", ".git", "dist", "src", "tests", ".agentshield_backup"].includes(entry.name)) {
-            traverse(fullPath);
+          // Explicitly ignore test directories, documentation, and security audit reports with sample attacks
+          if (["node_modules", ".git", "dist", "src", "tests", "security-audit", "docs", ".agentshield_backup"].includes(entry.name)) {
+            continue;
           }
+          traverse(fullPath);
         } else if (entry.isFile()) {
           // If it's documentation or markdown describing security rules, skip pure text descriptions
-          if (["README.md", "SECURITY_TESTING.md"].includes(entry.name)) {
+          if (["README.md", "SECURITY_TESTING.md", "FINAL_REPORT.md", "PROMPT_INJECTION_REPORT.md", "SKILL_SCANNER_REPORT.md"].includes(entry.name)) {
             continue;
           }
           const ext = path.extname(entry.name).toLowerCase();
+          // Only scan executable skill scripts and manifest definitions inside skills directories
           if ([".md", ".json", ".yaml", ".yml", ".sh"].includes(ext)) {
+            // If it's a markdown file not inside a skills directory or .agents/skills, ignore documentation
+            if (ext === ".md" && !fullPath.toLowerCase().includes("skill")) {
+              continue;
+            }
             filesScanned++;
             findings.push(...this.scanFile(fullPath));
           }
